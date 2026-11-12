@@ -28,13 +28,16 @@ fn void RtuStream.init(&self, Transport transport, Duration gap)
 }
 
 // Waits up to `wait` for the first byte (TIMEOUT when nothing comes), then collects bytes until the line has been
-// silent for `gap`. Returns the frame length. A frame longer than `out` is read to its end and refused (BAD_LENGTH).
+// silent for `gap`. Returns the frame length. A frame longer than `out` is read to its end and refused (BAD_LENGTH);
+// so is a line that keeps sending: after `2 * out.len + 64` bytes the read gives up.
 // CLOSED when the stream ended before any byte; bytes that arrived before the end are returned first.
 fn usz? RtuStream.read_frame(&self, char[] out, Duration wait)
 {
 	usz? first = self.transport.read(out, wait);
 	if (catch f = first) return modbus::is_timeout(f) ? modbus::TIMEOUT~ : modbus::CLOSED~;
 	usz n = first;
+	usz total = n;
+	usz budget = 2 * out.len + 64;      // a line that never goes silent is refused after this many bytes
 	bool too_long = false;
 	char[64] sink;
 	while (true)
@@ -48,6 +51,12 @@ fn usz? RtuStream.read_frame(&self, char[] out, Duration wait)
 		else
 		{
 			too_long = true;
+		}
+		total += more;
+		if (total >= budget)
+		{
+			too_long = true;
+			break;
 		}
 	}
 	if (too_long) return modbus::BAD_LENGTH~;

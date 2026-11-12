@@ -575,3 +575,35 @@ fn void test_default_unit_zero_is_refused() @test
 		assert(b.map.holding[1] == 3);
 	};
 }
+
+// A line that never goes silent must not keep a read inside read_frame for ever.
+struct Chatter
+{
+	int reads;
+}
+
+fn usz? Chatter.read(&self, char[] buf, Duration timeout) @dynamic
+{
+	self.reads++;
+	if (self.reads > 100000) return TIMEOUT~;      // the test's own safety net
+	buf[0] = 0x55;
+	return 1;
+}
+
+fn void? Chatter.write(&self, char[] data, Duration timeout) @dynamic {}
+fn void? Chatter.close(&self) @dynamic {}
+
+fn void test_read_frame_stops_on_a_line_that_never_goes_silent() @test
+{
+	Chatter c;
+	RtuStream s;
+	s.init((Transport)&c, time::ms(1));
+	char[256] buf;
+	assert(@catch(s.read_frame(&buf, time::ms(10))) == modbus::BAD_LENGTH);
+	assert(c.reads < 1000, "gave up after a bounded number of bytes (%d reads)", c.reads);
+	// a smaller buffer is bounded too
+	c.reads = 0;
+	char[16] small;
+	assert(@catch(s.read_frame(&small, time::ms(10))) == modbus::BAD_LENGTH);
+	assert(c.reads < 1000);
+}
