@@ -20,11 +20,11 @@ commands:
   read  HOST[:PORT] [--unit N] [--fc coils|discrete|holding|input] [--addr A] [--count C]
                     [--as u16|i16|u32|i32|f32|u64|i64|f64] [--order ABCD|CDAB|BADC|DCBA] [--timeout MS]
         print the values on one line, separated by spaces (default: holding registers as u16)
-  write HOST[:PORT] --allow-write [--unit N] [--fc coil|register|coils|registers] [--addr A] VALUE...
+  write HOST[:PORT] --allow-write [--unit N] [--fc coil|register|coils|registers] [--addr A] [--timeout MS] VALUE...
         write coils (0 or 1) or registers; refused without --allow-write (nothing is sent)
   serve [--bind ADDR] [--port P] [--unit N] [--coils N] [--registers N] [--allow-write]
         serve an in-memory register map (default 127.0.0.1:502, read-only without --allow-write)
-  devid HOST[:PORT] [--unit N] [--code 1|2|3]
+  devid HOST[:PORT] [--unit N] [--code 1|2|3] [--timeout MS]
         read the device identification, one "id: value" line per object
 
 options:

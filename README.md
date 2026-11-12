@@ -64,7 +64,7 @@ Writing to a machine needs two steps: the library refuses every write function u
 mbtool read  HOST[:PORT] [--unit N] [--fc coils|discrete|holding|input] [--addr A] [--count C] [--as f32] [--order CDAB]
 mbtool write HOST[:PORT] --allow-write [--unit N] [--fc coil|register|coils|registers] [--addr A] VALUE...
 mbtool serve [--bind ADDR] [--port P] [--unit N] [--coils N] [--registers N] [--allow-write]
-mbtool devid HOST[:PORT]
+mbtool devid HOST[:PORT] [--code 1|2|3]
 ```
 
 Exit codes: 0 ok, 1 error or timeout, 2 usage error or refused write, 3 Modbus exception. `mbtool serve` binds
