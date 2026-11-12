@@ -10,6 +10,7 @@ logging.getLogger("pymodbus").setLevel(logging.ERROR)
 
 import pymodbus.datastore as ds
 import pymodbus.pdu.device as pdu_device
+from pymodbus import FramerType
 from pymodbus.server import StartTcpServer, ServerStop
 
 
@@ -17,6 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description="Pymodbus TCP peer server")
     parser.add_argument("--host", default="127.0.0.1", help="Bind address")
     parser.add_argument("--port", type=int, default=5020, help="Bind port")
+    parser.add_argument("--rtu", action="store_true", help="RTU framing over the TCP connection")
     args = parser.parse_args()
 
     hr_vals = [i * 10 for i in range(100)]
@@ -59,6 +61,7 @@ def main():
         context=context,
         identity=identity,
         address=(args.host, args.port),
+        framer=FramerType.RTU if args.rtu else FramerType.SOCKET,
     )
 
 

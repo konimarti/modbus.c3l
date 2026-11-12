@@ -6,6 +6,7 @@ import warnings
 warnings.filterwarnings("ignore")
 logging.getLogger("pymodbus").setLevel(logging.ERROR)
 
+from pymodbus import FramerType
 from pymodbus.client import ModbusTcpClient
 
 
@@ -22,9 +23,11 @@ def main():
     parser = argparse.ArgumentParser(description="Pymodbus TCP peer client")
     parser.add_argument("--host", default="127.0.0.1", help="Target host")
     parser.add_argument("--port", type=int, default=5020, help="Target port")
+    parser.add_argument("--rtu", action="store_true", help="RTU framing over the TCP connection")
     args = parser.parse_args()
 
-    client = ModbusTcpClient(args.host, port=args.port)
+    framer = FramerType.RTU if args.rtu else FramerType.SOCKET
+    client = ModbusTcpClient(args.host, port=args.port, framer=framer)
     if not client.connect():
         print(f"FAIL connect unable to connect to {args.host}:{args.port}", flush=True)
         sys.exit(1)

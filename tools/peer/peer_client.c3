@@ -6,6 +6,7 @@ import std::time;
 import modbus;
 import modbus::client;
 import modbus::pdu;
+import modbus::rtu_stream;
 import modbus::tcp;
 import modbus::transport;
 
@@ -33,8 +34,15 @@ fn int run(String host, ushort port)
 	config.allow_write = true;
 	config.timeout = time::sec(3);
 
+$if $feat(RTU):
+	// RTU framing over the TCP connection: a frame ends after 20 ms of silence
+	RtuClient bc;
+	bool init_ok = @ok(bc.init((Transport)&transport, config, time::ms(20), mem));
+$else
 	BlockingClient bc;
-	if (catch f = bc.init((Transport)&transport, config, mem))
+	bool init_ok = @ok(bc.init((Transport)&transport, config, mem));
+$endif
+	if (!init_ok)
 	{
 		report_fail("init", "failed to init client");
 		return 1;

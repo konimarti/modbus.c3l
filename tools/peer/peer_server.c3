@@ -7,7 +7,9 @@ import std::time;
 import modbus;
 import modbus::pdu;
 import modbus::server;
+import modbus::rtu_stream;
 import modbus::tcp;
+import modbus::transport;
 
 fn int run(String host, ushort port)
 {
@@ -53,6 +55,26 @@ fn int run(String host, ushort port)
 	}
 	TcpServerSocket listener = l;
 
+$if $feat(RTU):
+	// RTU framing, one TCP connection at a time (a port probe connects and leaves, then the real client comes):
+	// frames end after 20 ms of silence
+	for (int c = 0; c < 8; c++)
+	{
+		TcpSocket? conn = tcp::accept(&listener);
+		if (catch f = conn) break;
+		TcpTransport io;
+		io.adopt(conn);
+		RtuStream stream;
+		stream.init((Transport)&io, time::ms(20));
+		for (int i = 0; i < 600; i++)
+		{
+			if (catch f = rtu_stream::serve_rtu_once(&stream, &cfg, (DataModel)&map, time::ms(100))) break;
+		}
+		(void)io.close();
+	}
+	(void)listener.close();
+	return 0;
+$else
 	TcpServer server;
 	if (catch f = server.init(listener, &cfg, (DataModel)&map, mem))
 	{
@@ -69,6 +91,7 @@ fn int run(String host, ushort port)
 	}
 
 	return 0;
+$endif
 }
 
 fn int main(String[] args)
