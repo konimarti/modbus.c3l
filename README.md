@@ -47,6 +47,7 @@ fn void? read_temperature()
 | `modbus::client` | sans-IO client: pipelining by transaction id, timeouts (time is passed in), write guard |
 | `modbus::server` | sans-IO server: `DataModel` callbacks, `RegisterMap`, RTU entry point `handle_rtu` |
 | `modbus::transport` | `interface Transport` (`read`, `write`, `close`, with `Duration` timeouts), shared shape of the plant libraries |
+| `modbus::rtu_stream` | RTU over any `Transport`: frames by silence (`RtuStream`), `RtuClient`, `serve_rtu_once`; serial I/O itself is not part of the library |
 | `modbus::tcp` | `TcpTransport`, `BlockingClient`, `TcpServer` (poll based, no threads) |
 
 The sans-IO core never reads a clock and does no I/O: bytes in, events and bytes out. Any type with the three
@@ -69,6 +70,15 @@ mbtool devid HOST[:PORT]
 Exit codes: 0 ok, 1 error or timeout, 2 usage error or refused write, 3 Modbus exception. `mbtool serve` binds
 127.0.0.1 unless `--bind` is given and is read-only without `--allow-write`. `tools/smoke.sh` and `tools/cli-test.sh`
 run the tool against its own server.
+
+## RTU
+
+`RtuStream` frames a byte stream by silence: a frame ends when no byte arrives for the gap you pass in (3.5 character
+times on a serial line, 5 to 20 ms for RTU over a TCP gateway). `RtuClient` sends one request at a time and flushes
+stale input and waits the gap before it sends, so a late answer to an earlier request is not taken for the next one;
+an answer that arrives after that quiet time cannot be told apart from a real one (inherent to RTU). A frame with a
+bad CRC is dropped and the request times out. `serve_rtu_once` serves one frame; broadcasts (address 0) are executed
+and never answered. `tools/peer/run.sh --rtu` runs the pymodbus suite with RTU framing over TCP.
 
 ## Server limits
 
