@@ -85,6 +85,7 @@ fn void? Client.init(&self, ClientConfig config, Allocator allocator)
 	*self = {};
 	self.config = config;
 	self.allocator = allocator;
+	defer catch self.free();        // a failure below gives back what was allocated before it
 	self.pending = alloc::new_array_try(allocator, Pending, (sz)config.max_pending)!;
 	self.out = alloc::new_array_try(allocator, char, (sz)config.output_size)!;
 	self.next_tid = 1;

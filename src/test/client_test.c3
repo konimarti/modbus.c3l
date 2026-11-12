@@ -829,3 +829,20 @@ fn void test_rtu_feed_rules() @test
 		assert(@catch(t.feed_frame(support::hx("01 83 02 C0 F1"))) == modbus::BAD_VALUE);
 	};
 }
+
+// A failing second allocation must not leak the first one.
+fn void test_init_failure_releases_the_slots() @test
+{
+	support::LimitedAllocator a = { .allowed = 1 };        // the slots succeed, the output buffer fails
+	Client c;
+	assert(!@ok(c.init(cfg(1), &a)));
+	assert(a.live == 0, "the slots of a failed init were not released (%d live)", a.live);
+	support::LimitedAllocator none = { .allowed = 0 };
+	assert(!@ok(c.init(cfg(1), &none)));
+	assert(none.live == 0);
+	support::LimitedAllocator enough = { .allowed = 2 };
+	c.init(cfg(1), &enough)!!;
+	assert(enough.live == 2);
+	c.free();
+	assert(enough.live == 0);
+}

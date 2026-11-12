@@ -32,3 +32,30 @@ fn char[] padded(String head, usz n)
 	mem::copy(all.ptr, h.ptr, (sz)h.len);
 	return all;
 }
+
+// An allocator that serves a fixed number of allocations and then fails; counts what is still live,
+// so a test can check that a failed init gave back everything it had taken.
+struct LimitedAllocator (Allocator)
+{
+	int allowed;
+	int live;
+}
+
+fn void*? LimitedAllocator.acquire(&self, sz bytes, AllocInitType init_type, sz alignment) @dynamic
+{
+	if (self.allowed <= 0) return mem::OUT_OF_MEMORY~;
+	self.allowed--;
+	self.live++;
+	return mem::calloc(bytes);
+}
+
+fn void*? LimitedAllocator.resize(&self, void* old_ptr, sz new_bytes, sz alignment) @dynamic
+{
+	return mem::OUT_OF_MEMORY~;
+}
+
+fn void LimitedAllocator.release(&self, void* old_ptr, bool aligned) @dynamic
+{
+	self.live--;
+	mem::free(old_ptr);
+}
