@@ -275,10 +275,10 @@ fn void test_unknown_and_reserved_function_codes() @test
 		assert(r.call("FF 00").len == 0);
 		assert(r.conn.output().len == 0);
 		support::assert_bytes(r.call("07"), "87 01");
-		// functions of a later step are not served yet
-		support::assert_bytes(r.call("2B 0E 01 00"), "AB 01");
-		support::assert_bytes(r.call("16 00 04 00 F2 00 25"), "96 01");
-		support::assert_bytes(r.call("11"), "91 01");
+		// functions the library does not implement (file records, FIFO queue, other MEI types)
+		support::assert_bytes(r.call("14 00"), "94 01");
+		support::assert_bytes(r.call("18 00 00"), "98 01");
+		support::assert_bytes(r.call("2B 0D 00 00"), "AB 01");
 	};
 }
 

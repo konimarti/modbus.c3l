@@ -33,6 +33,26 @@ struct ServerConfig
 	ushort max_write_bits;
 	ushort max_write_regs;
 	usz output_size;            // bytes of output buffer per connection; 0: 4 x 260
+	// Device identification (FC 43/14): objects in ascending id order, values at most 244 bytes. Borrowed.
+	pdu::DeviceObject[] device_objects;
+	char conformity_level;      // sent as is: 0x01 basic, 0x02 regular, 0x03 extended, plus 0x80 when individual access is offered
+	char[] server_id;           // FC 0x11 payload (id, run indicator, additional data); empty: ILLEGAL_FUNCTION
+	bool allow_diagnostics;     // FC 8: sub-function 0x0000 (return query data) is answered; false: ILLEGAL_FUNCTION
+}
+
+const usz MAX_OBJECT_VALUE = 244;     // 253 - 7 header bytes - 2 object header bytes
+
+// Checks what the server cannot answer correctly: objects out of order or with a value that cannot fit a PDU.
+fn void? ServerConfig.check(&self)
+{
+	int last = -1;
+	foreach (o : self.device_objects)
+	{
+		if (o.value.len > MAX_OBJECT_VALUE) return modbus::BAD_LENGTH~;
+		if ((int)o.id <= last) return modbus::BAD_VALUE~;
+		last = o.id;
+	}
+	if (self.server_id.len > 250) return modbus::BAD_LENGTH~;
 }
 
 // One per connection. Holds the framer and the pending output.
@@ -52,6 +72,7 @@ fn void? ServerConn.init(&self, ServerConfig* config, DataModel model, Allocator
 {
 	usz size = config.output_size == 0 ? 4 * modbus::MAX_TCP_ADU : config.output_size;
 	if (size < modbus::MAX_TCP_ADU) return modbus::BUFFER_TOO_SMALL~;
+	config.check()!;
 	*self = {};
 	self.config = config;
 	self.model = model;
@@ -134,12 +155,12 @@ fn bool accepts(ServerConfig* config, char unit) @private
 // Functions this step answers; every other code gets ILLEGAL_FUNCTION.
 fn bool implemented(char fc) @private
 {
-	return (fc >= 1 && fc <= 6) || fc == 0x0F || fc == 0x10;
+	return (fc >= 1 && fc <= 6) || fc == 0x08 || fc == 0x0F || fc == 0x10 || fc == 0x11 || fc == 0x16 || fc == 0x17 || fc == 0x2B;
 }
 
 fn bool is_write(char fc) @private
 {
-	return fc == 5 || fc == 6 || fc == 0x0F || fc == 0x10;
+	return fc == 5 || fc == 6 || fc == 0x0F || fc == 0x10 || fc == 0x16 || fc == 0x17;
 }
 
 fn usz exception(char fc, ExceptionCode code, char[] resp) @private
@@ -163,6 +184,12 @@ fn bool over_limit(ServerConfig* config, char[] pdu) @private
 		ushort lim = fc == 0x0F ? config.max_write_bits : config.max_write_regs;
 		return lim != 0 && qty > lim;
 	}
+	if (fc == 0x17 && pdu.len >= 10)
+	{
+		ushort rq = (ushort)(((ushort)pdu[3] << 8) | pdu[4]);
+		ushort wq = (ushort)(((ushort)pdu[7] << 8) | pdu[8]);
+		return (config.max_read_regs != 0 && rq > config.max_read_regs) || (config.max_write_regs != 0 && wq > config.max_write_regs);
+	}
 	return false;
 }
 
@@ -174,7 +201,7 @@ fn void ServerConn.handle(&self, MbapFrame* fr)
 	char fc = p[0];
 	if (fc >= 0x80) return;                     // not a request: no answer
 	char[modbus::MAX_PDU] resp;
-	usz n = self.execute(unit, p, &resp);
+	usz n = execute(self.config, self.model, unit, p, &resp);
 	// the room was checked by pump(): one ADU always fits
 	char[] dst = self.out[self.out_len..];
 	usz len = frame::mbap_encode(fr.header.tid, unit, resp[:n], dst)!!;
@@ -182,12 +209,12 @@ fn void ServerConn.handle(&self, MbapFrame* fr)
 }
 
 // Runs one request and returns the length of the answer PDU in `resp`.
-fn usz ServerConn.execute(&self, char unit, char[] pdu, char[] resp)
+fn usz execute(ServerConfig* config, DataModel model, char unit, char[] pdu, char[] resp) @private
 {
 	char fc = pdu[0];
 	if (!implemented(fc)) return exception(fc, ExceptionCode.ILLEGAL_FUNCTION, resp);
-	if (is_write(fc) && !self.model.writable(unit)) return exception(fc, ExceptionCode.ILLEGAL_FUNCTION, resp);
-	if (over_limit(self.config, pdu)) return exception(fc, ExceptionCode.ILLEGAL_DATA_VALUE, resp);
+	if (is_write(fc) && !model.writable(unit)) return exception(fc, ExceptionCode.ILLEGAL_FUNCTION, resp);
+	if (over_limit(config, pdu)) return exception(fc, ExceptionCode.ILLEGAL_DATA_VALUE, resp);
 	Request? decoded = pdu::decode_request(pdu);
 	if (catch f = decoded) return exception(fc, pdu::fault_to_exception(f), resp);
 	Request r = decoded;
@@ -197,10 +224,10 @@ fn usz ServerConn.execute(&self, char unit, char[] pdu, char[] resp)
 		case READ_COILS:
 		case READ_DISCRETE_INPUTS:
 			bool coils = (Fc)fc == Fc.READ_COILS;
-			e = self.model.check_range(unit, coils ? Table.COILS : Table.DISCRETE_INPUTS, r.addr, r.qty);
+			e = model.check_range(unit, coils ? Table.COILS : Table.DISCRETE_INPUTS, r.addr, r.qty);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			bool[modbus::MAX_READ_BITS] bits;
-			e = coils ? self.model.read_coils(unit, r.addr, bits[:r.qty]) : self.model.read_discrete_inputs(unit, r.addr, bits[:r.qty]);
+			e = coils ? model.read_coils(unit, r.addr, bits[:r.qty]) : model.read_discrete_inputs(unit, r.addr, bits[:r.qty]);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			usz bytes = ((usz)r.qty + 7) / 8;
 			resp[0] = fc;
@@ -214,10 +241,10 @@ fn usz ServerConn.execute(&self, char unit, char[] pdu, char[] resp)
 		case READ_HOLDING_REGISTERS:
 		case READ_INPUT_REGISTERS:
 			bool holding = (Fc)fc == Fc.READ_HOLDING_REGISTERS;
-			e = self.model.check_range(unit, holding ? Table.HOLDING_REGISTERS : Table.INPUT_REGISTERS, r.addr, r.qty);
+			e = model.check_range(unit, holding ? Table.HOLDING_REGISTERS : Table.INPUT_REGISTERS, r.addr, r.qty);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			ushort[modbus::MAX_READ_REGS] regs;
-			e = holding ? self.model.read_holding(unit, r.addr, regs[:r.qty]) : self.model.read_input(unit, r.addr, regs[:r.qty]);
+			e = holding ? model.read_holding(unit, r.addr, regs[:r.qty]) : model.read_input(unit, r.addr, regs[:r.qty]);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			resp[0] = fc;
 			resp[1] = (char)(r.qty * 2);
@@ -228,39 +255,198 @@ fn usz ServerConn.execute(&self, char unit, char[] pdu, char[] resp)
 			}
 			return 2 + (usz)r.qty * 2;
 		case WRITE_SINGLE_COIL:
-			e = self.model.check_range(unit, Table.COILS, r.addr, 1);
+			e = model.check_range(unit, Table.COILS, r.addr, 1);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			bool[1] one = { r.value == 0xFF00 };
-			e = self.model.write_coils(unit, r.addr, &one);
+			e = model.write_coils(unit, r.addr, &one);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			return echo(fc, r.addr, r.value, resp);
 		case WRITE_SINGLE_REGISTER:
-			e = self.model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, 1);
+			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, 1);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			ushort[1] reg = { r.value };
-			e = self.model.write_holding(unit, r.addr, &reg);
+			e = model.write_holding(unit, r.addr, &reg);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			return echo(fc, r.addr, r.value, resp);
 		case WRITE_MULTIPLE_COILS:
-			e = self.model.check_range(unit, Table.COILS, r.addr, r.qty);
+			e = model.check_range(unit, Table.COILS, r.addr, r.qty);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			bool[modbus::MAX_WRITE_BITS] values;
 			for (usz i = 0; i < r.qty; i++) values[i] = ((r.data[i / 8] >> (i % 8)) & 1) != 0;
-			e = self.model.write_coils(unit, r.addr, values[:r.qty]);
+			e = model.write_coils(unit, r.addr, values[:r.qty]);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			return echo(fc, r.addr, r.qty, resp);
 		case WRITE_MULTIPLE_REGISTERS:
-			e = self.model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, r.qty);
+			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, r.qty);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			ushort[modbus::MAX_WRITE_REGS] words;
 			for (usz i = 0; i < r.qty; i++) words[i] = (ushort)(((ushort)r.data[i * 2] << 8) | r.data[i * 2 + 1]);
-			e = self.model.write_holding(unit, r.addr, words[:r.qty]);
+			e = model.write_holding(unit, r.addr, words[:r.qty]);
 			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			return echo(fc, r.addr, r.qty, resp);
+		case MASK_WRITE_REGISTER:
+			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, 1);
+			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			ushort[1] old;
+			e = model.read_holding(unit, r.addr, &old);
+			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			ushort[1] updated = { (old[0] & r.and_mask) | (r.or_mask & ~r.and_mask) };
+			e = model.write_holding(unit, r.addr, &updated);
+			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			resp[0] = fc;
+			resp[1] = (char)(r.addr >> 8);
+			resp[2] = (char)(r.addr & 0xFF);
+			resp[3] = (char)(r.and_mask >> 8);
+			resp[4] = (char)(r.and_mask & 0xFF);
+			resp[5] = (char)(r.or_mask >> 8);
+			resp[6] = (char)(r.or_mask & 0xFF);
+			return 7;
+		case READ_WRITE_MULTIPLE_REGISTERS:
+			// both ranges are checked before anything is written; then write, then read
+			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.write_addr, r.write_qty);
+			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, r.qty);
+			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			ushort[modbus::MAX_RW_WRITE_REGS] rw_words;
+			for (usz i = 0; i < r.write_qty; i++) rw_words[i] = (ushort)(((ushort)r.data[i * 2] << 8) | r.data[i * 2 + 1]);
+			e = model.write_holding(unit, r.write_addr, rw_words[:r.write_qty]);
+			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			ushort[modbus::MAX_RW_READ_REGS] rw_regs;
+			e = model.read_holding(unit, r.addr, rw_regs[:r.qty]);
+			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			resp[0] = fc;
+			resp[1] = (char)(r.qty * 2);
+			for (usz i = 0; i < r.qty; i++)
+			{
+				resp[2 + i * 2] = (char)(rw_regs[i] >> 8);
+				resp[3 + i * 2] = (char)(rw_regs[i] & 0xFF);
+			}
+			return 2 + (usz)r.qty * 2;
+		case DIAGNOSTICS:
+			// only sub-function 0x0000 (return query data) is answered
+			if (!config.allow_diagnostics || r.sub != 0) return exception(fc, ExceptionCode.ILLEGAL_FUNCTION, resp);
+			Response echo_rsp = { .fc = fc, .sub = r.sub, .data = r.data };
+			return pdu::encode_response(&echo_rsp, resp)!!;
+		case REPORT_SERVER_ID:
+			if (config.server_id.len == 0) return exception(fc, ExceptionCode.ILLEGAL_FUNCTION, resp);
+			Response id_rsp = { .fc = fc, .data = config.server_id };
+			return pdu::encode_response(&id_rsp, resp)!!;
+		case ENCAPSULATED_INTERFACE:
+			return read_device_id(config, r, resp);
 		default:
 			return exception(fc, ExceptionCode.ILLEGAL_FUNCTION, resp);
 	}
 }
+
+// First and last object id of what a Read Device ID code covers (basic, regular, extended).
+fn void code_range(char code, char* lo, char* hi) @private
+{
+	switch (code)
+	{
+		case 1:
+			*lo = 0x00;
+			*hi = 0x02;
+		case 2:
+			*lo = 0x03;
+			*hi = 0x7F;
+		default:
+			*lo = 0x80;
+			*hi = 0xFF;
+	}
+}
+
+// FC 43/14 (MAP 6.21). Codes 1 to 3 stream the objects of their range starting at the requested id (an id that is not
+// there restarts at the first object of the range); when the next object does not fit the PDU, more-follows is set and
+// the id of the next object is returned. Code 4 returns exactly the requested object.
+fn usz read_device_id(ServerConfig* config, Request r, char[] resp) @private
+{
+	char fc = r.fc;
+	char[modbus::MAX_PDU] objs;
+	usz used = 0;
+	usz count = 0;
+	bool more = false;
+	char next = 0;
+	if (r.read_dev_code == 4)
+	{
+		bool found = false;
+		foreach (o : config.device_objects)
+		{
+			if (o.id != r.object_id) continue;
+			objs[0] = o.id;
+			objs[1] = (char)o.value.len;
+			for (usz i = 0; i < o.value.len; i++) objs[2 + i] = o.value[i];
+			used = 2 + o.value.len;
+			count = 1;
+			found = true;
+		}
+		if (!found) return exception(fc, ExceptionCode.ILLEGAL_DATA_ADDRESS, resp);
+	}
+	else
+	{
+		char lo;
+		char hi;
+		code_range(r.read_dev_code, &lo, &hi);
+		bool known = false;
+		foreach (o : config.device_objects)
+		{
+			if (o.id == r.object_id && o.id >= lo && o.id <= hi) known = true;
+		}
+		char start = known ? r.object_id : lo;
+		foreach (o : config.device_objects)
+		{
+			if (o.id < start || o.id < lo || o.id > hi) continue;
+			if (more) continue;
+			if (7 + used + 2 + o.value.len > modbus::MAX_PDU)
+			{
+				more = true;
+				next = o.id;
+				continue;
+			}
+			objs[used] = o.id;
+			objs[used + 1] = (char)o.value.len;
+			for (usz i = 0; i < o.value.len; i++) objs[used + 2 + i] = o.value[i];
+			used += 2 + o.value.len;
+			count++;
+		}
+	}
+	Response rsp = {
+		.fc = fc,
+		.read_dev_code = r.read_dev_code,
+		.conformity = config.conformity_level,
+		.more_follows = more,
+		.next_object_id = next,
+		.object_count = (char)count,
+		.data = objs[:used],
+	};
+	return pdu::encode_response(&rsp, resp)!!;
+}
+
+// RTU entry point: one frame as delimited by the transport. Returns the length of the answer frame written to
+// `out`, or 0 when nothing is to be sent: a bad CRC or a short frame, an address that is not served (248 to 255 are
+// reserved), a broadcast (address 0: write functions are executed, nothing is answered, other functions are ignored).
+fn usz? handle_rtu(ServerConfig* config, DataModel model, char[] frame, char[] out)
+{
+	RtuFrame? decoded = frame::rtu_decode(frame);
+	if (catch f = decoded) return 0;
+	char addr = decoded.addr;
+	char[] p = decoded.pdu;
+	if (addr >= 248) return 0;
+	if (p[0] >= 0x80) return 0;
+	bool broadcast = addr == 0;
+	if (broadcast)
+	{
+		if (!is_write(p[0])) return 0;
+	}
+	else if (!accepts(config, addr))
+	{
+		return 0;
+	}
+	char[modbus::MAX_PDU] resp;
+	usz n = execute(config, model, addr, p, &resp);
+	if (broadcast) return 0;
+	return frame::rtu_encode(addr, resp[:n], out)!;
+}
+
 
 // fc, address, value / quantity (the answer of the write functions).
 fn usz echo(char fc, ushort addr, ushort value, char[] resp) @private
