@@ -35,7 +35,7 @@ struct ServerConfig
 	usz output_size;            // bytes of output buffer per connection; 0: 4 x 260
 	// Device identification (FC 43/14): objects in ascending id order, values at most 244 bytes. Borrowed.
 	pdu::DeviceObject[] device_objects;
-	char conformity_level;      // sent as is: 0x01 basic, 0x02 regular, 0x03 extended, plus 0x80 when individual access is offered
+	char conformity_level;      // sent as is: 0x01 basic, 0x02 regular, 0x03 extended, plus 0x80 when individual access is offered (without it code 4 answers ILLEGAL_DATA_VALUE)
 	char[] server_id;           // FC 0x11 payload (id, run indicator, additional data); empty: ILLEGAL_FUNCTION
 	bool allow_diagnostics;     // FC 8: sub-function 0x0000 (return query data) is answered; false: ILLEGAL_FUNCTION
 }
@@ -368,6 +368,8 @@ fn usz read_device_id(ServerConfig* config, Request r, char[] resp) @private
 	char next = 0;
 	if (r.read_dev_code == 4)
 	{
+		// individual access is only offered when the conformity level says so (bit 0x80)
+		if ((config.conformity_level & 0x80) == 0) return exception(fc, ExceptionCode.ILLEGAL_DATA_VALUE, resp);
 		bool found = false;
 		foreach (o : config.device_objects)
 		{

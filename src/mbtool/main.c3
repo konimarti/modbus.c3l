@@ -475,7 +475,7 @@ fn int cmd_serve(Opts* o)
 		.accept_any_unit = !o.unit_given,
 		.units = o.unit_given ? units[:1] : {},
 		.device_objects = &objs,
-		.conformity_level = 0x01,
+		.conformity_level = 0x81,
 		.server_id = sid[:8],
 		.allow_diagnostics = true,
 	};

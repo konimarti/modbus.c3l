@@ -564,3 +564,20 @@ fn void test_rtu_ignored_frames() @test
 		assert(@catch(server::handle_rtu(&r.cfg, (DataModel)&r.map, req[:n], &tiny)) == modbus::BUFFER_TOO_SMALL);
 	};
 }
+
+// A server that does not announce individual access (conformity bit 0x80) refuses code 4 with exception 03.
+fn void test_individual_access_needs_the_conformity_bit() @test
+{
+	@pool()
+	{
+		Rig r;
+		r.setup(basic_objects());                        // conformity level 0x01
+		defer r.teardown();
+		support::assert_bytes(r.call("2B 0E 04 05"), "AB 03");
+		support::assert_bytes(r.call("2B 0E 04 00"), "AB 03");
+		// streaming access is unaffected
+		assert(r.call("2B 0E 01 00").len > 7);
+		r.cfg.conformity_level = 0x81;
+		support::assert_bytes(r.call("2B 0E 04 05"), "2B 0E 04 81 00 00 01 05 02 4D 31");
+	};
+}
