@@ -397,3 +397,19 @@ fn void test_encode_exception() @test
 	char[1] tiny;
 	assert(pdu::encode_exception(3, ExceptionCode.ILLEGAL_FUNCTION, &tiny) == 0);
 }
+
+fn void test_encode_response_checks_coil_value() @test
+{
+	char[8] out;
+	Response r = { .fc = (char)Fc.WRITE_SINGLE_COIL, .addr = 1, .value = 0x1234 };
+	assert(@catch(pdu::encode_response(&r, &out)) == modbus::BAD_VALUE);
+	r.value = 0x0001;
+	assert(@catch(pdu::encode_response(&r, &out)) == modbus::BAD_VALUE);
+	r.value = 0xFF00;
+	assert(pdu::encode_response(&r, &out)!! == 5);
+	r.value = 0x0000;
+	assert(pdu::encode_response(&r, &out)!! == 5);
+	// a single register may hold any value
+	Response reg = { .fc = (char)Fc.WRITE_SINGLE_REGISTER, .addr = 1, .value = 0x1234 };
+	assert(pdu::encode_response(&reg, &out)!! == 5);
+}

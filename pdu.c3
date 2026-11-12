@@ -367,6 +367,7 @@ fn usz? encode_response(Response* rsp, char[] out)
 		case WRITE_SINGLE_REGISTER:
 		case WRITE_MULTIPLE_COILS:
 		case WRITE_MULTIPLE_REGISTERS:
+			if (fc == Fc.WRITE_SINGLE_COIL && rsp.value != 0x0000 && rsp.value != 0xFF00) return modbus::BAD_VALUE~;
 			total = 5;
 			if (out.len < total) return modbus::BUFFER_TOO_SMALL~;
 			put16(out, 1, rsp.addr);
