@@ -139,8 +139,9 @@ fn Response? RtuClient.call(&self, Request* req, ExceptionCode* exc, int unit = 
 				case TIMEOUT:
 					return modbus::TIMEOUT~;
 				case PROTOCOL_ERROR:
-					// not the answer to this request (bad CRC, wrong unit, stray frame): keep waiting for its deadline
-					if (!ev.fatal) continue;
+					// not the answer to this request (bad CRC, wrong unit, stray frame): keep waiting for its deadline.
+					// When the request is no longer pending, its own answer was bad: that is the result.
+					if (!ev.fatal && self.core.pending_count() > 0) continue;
 					return ev.error~;
 			}
 		}

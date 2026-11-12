@@ -529,3 +529,28 @@ fn void test_device_step_reports_a_closed_line() @test
 		assert(@catch(rtu_stream::serve_rtu_once(&b.device_stream, &b.cfg, (DataModel)&b.map, time::ms(5))) == modbus::CLOSED);
 	};
 }
+
+// A CRC-valid answer whose body is wrong is a real (wrong) answer, not a lost one: the fault is reported,
+// not a closed connection.
+fn void test_valid_crc_bad_body_is_reported() @test
+{
+	@pool()
+	{
+		Bench b;
+		b.setup();
+		b.client_end.device_stream = null;
+		defer b.teardown();
+		char[16] answer;
+		// four bytes of data for a read of three registers
+		usz n = frame::rtu_encode(1, support::hx("03 04 02 2B 00 00"), &answer)!!;
+		mem::copy(&b.client_end.inject[0], &answer[0], (sz)n);
+		b.client_end.inject_len = n;
+		ExceptionCode exc;
+		Request r = pdu::read_request(Fc.READ_HOLDING_REGISTERS, 1, 3);
+		assert(@catch(b.client.call(&r, &exc)) == modbus::BAD_BYTE_COUNT);
+		// the client is still usable
+		b.client_end.inject_len = 0;
+		b.client_end.device_stream = &b.device_stream;
+		b.client.call(&r, &exc)!!;
+	};
+}
