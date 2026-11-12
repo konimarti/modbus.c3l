@@ -40,7 +40,7 @@ fn void? read_temperature()
 
 | module | what |
 |---|---|
-| `modbus` | function codes, exception codes, limits, faults |
+| `modbus` | function codes, exception codes, limits, faults, and the small shared helpers `ClockFn`/`real_clock` (the monotonic clock the adapters read) and `is_timeout` (matches another library's `TIMEOUT` fault by name) |
 | `modbus::pdu` | request and response codec for every function above, device-id object iterator |
 | `modbus::frame` | MBAP framer, CRC-16, RTU frames |
 | `modbus::data` | registers to int16/32/64, float32/64, strings in all four byte/word orders; coil packing |
