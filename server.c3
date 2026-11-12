@@ -3,6 +3,7 @@ module modbus::server;
 import std::core::mem;
 import std::core::mem::alloc;
 import modbus;
+import modbus::data;
 import modbus::pdu;
 import modbus::frame;
 
@@ -174,20 +175,20 @@ fn bool over_limit(ServerConfig* config, char[] pdu) @private
 	char fc = pdu[0];
 	if (fc >= 1 && fc <= 4 && pdu.len == 5)
 	{
-		ushort qty = (ushort)(((ushort)pdu[3] << 8) | pdu[4]);
+		ushort qty = pdu::get16(pdu, 3);
 		ushort lim = fc <= 2 ? config.max_read_bits : config.max_read_regs;
 		return lim != 0 && qty > lim;
 	}
 	if ((fc == 0x0F || fc == 0x10) && pdu.len >= 6)
 	{
-		ushort qty = (ushort)(((ushort)pdu[3] << 8) | pdu[4]);
+		ushort qty = pdu::get16(pdu, 3);
 		ushort lim = fc == 0x0F ? config.max_write_bits : config.max_write_regs;
 		return lim != 0 && qty > lim;
 	}
 	if (fc == 0x17 && pdu.len >= 10)
 	{
-		ushort rq = (ushort)(((ushort)pdu[3] << 8) | pdu[4]);
-		ushort wq = (ushort)(((ushort)pdu[7] << 8) | pdu[8]);
+		ushort rq = pdu::get16(pdu, 3);
+		ushort wq = pdu::get16(pdu, 7);
 		return (config.max_read_regs != 0 && rq > config.max_read_regs) || (config.max_write_regs != 0 && wq > config.max_write_regs);
 	}
 	return false;
@@ -228,14 +229,9 @@ fn usz execute(ServerConfig* config, DataModel model, char unit, char[] pdu, cha
 			e = model.check_range(unit, coils ? Table.COILS : Table.DISCRETE_INPUTS, r.addr, r.qty);
 			if (e == NONE) e = coils ? model.read_coils(unit, r.addr, bits[:r.qty]) : model.read_discrete_inputs(unit, r.addr, bits[:r.qty]);
 			if (e != NONE) return exception(fc, e, resp);
-			usz bytes = ((usz)r.qty + 7) / 8;
+			usz bytes = data::pack_coils(bits[:r.qty], resp[2..])!!;
 			resp[0] = fc;
 			resp[1] = (char)bytes;
-			for (usz i = 0; i < bytes; i++) resp[2 + i] = 0;
-			for (usz i = 0; i < r.qty; i++)
-			{
-				if (bits[i]) resp[2 + i / 8] |= (char)(1 << (i % 8));
-			}
 			return 2 + bytes;
 		case READ_HOLDING_REGISTERS:
 		case READ_INPUT_REGISTERS:
@@ -244,14 +240,7 @@ fn usz execute(ServerConfig* config, DataModel model, char unit, char[] pdu, cha
 			e = model.check_range(unit, holding ? Table.HOLDING_REGISTERS : Table.INPUT_REGISTERS, r.addr, r.qty);
 			if (e == NONE) e = holding ? model.read_holding(unit, r.addr, regs[:r.qty]) : model.read_input(unit, r.addr, regs[:r.qty]);
 			if (e != NONE) return exception(fc, e, resp);
-			resp[0] = fc;
-			resp[1] = (char)(r.qty * 2);
-			for (usz i = 0; i < r.qty; i++)
-			{
-				resp[2 + i * 2] = (char)(regs[i] >> 8);
-				resp[3 + i * 2] = (char)(regs[i] & 0xFF);
-			}
-			return 2 + (usz)r.qty * 2;
+			return registers_answer(fc, regs[:r.qty], resp);
 		case WRITE_SINGLE_COIL:
 			bool[1] one = { r.value == 0xFF00 };
 			e = model.check_range(unit, Table.COILS, r.addr, 1);
@@ -266,14 +255,14 @@ fn usz execute(ServerConfig* config, DataModel model, char unit, char[] pdu, cha
 			return echo(fc, r.addr, r.value, resp);
 		case WRITE_MULTIPLE_COILS:
 			bool[modbus::MAX_WRITE_BITS] values;
-			for (usz i = 0; i < r.qty; i++) values[i] = ((r.data[i / 8] >> (i % 8)) & 1) != 0;
+			data::unpack_coils(r.data, r.qty, values[:r.qty])!!;
 			e = model.check_range(unit, Table.COILS, r.addr, r.qty);
 			if (e == NONE) e = model.write_coils(unit, r.addr, values[:r.qty]);
 			if (e != NONE) return exception(fc, e, resp);
 			return echo(fc, r.addr, r.qty, resp);
 		case WRITE_MULTIPLE_REGISTERS:
 			ushort[modbus::MAX_WRITE_REGS] words;
-			for (usz i = 0; i < r.qty; i++) words[i] = (ushort)(((ushort)r.data[i * 2] << 8) | r.data[i * 2 + 1]);
+			pdu::bytes_to_regs(r.data, words[:r.qty]);
 			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, r.qty);
 			if (e == NONE) e = model.write_holding(unit, r.addr, words[:r.qty]);
 			if (e != NONE) return exception(fc, e, resp);
@@ -286,31 +275,21 @@ fn usz execute(ServerConfig* config, DataModel model, char unit, char[] pdu, cha
 			if (e == NONE) e = model.write_holding(unit, r.addr, &updated);
 			if (e != NONE) return exception(fc, e, resp);
 			resp[0] = fc;
-			resp[1] = (char)(r.addr >> 8);
-			resp[2] = (char)(r.addr & 0xFF);
-			resp[3] = (char)(r.and_mask >> 8);
-			resp[4] = (char)(r.and_mask & 0xFF);
-			resp[5] = (char)(r.or_mask >> 8);
-			resp[6] = (char)(r.or_mask & 0xFF);
+			pdu::put16(resp, 1, r.addr);
+			pdu::put16(resp, 3, r.and_mask);
+			pdu::put16(resp, 5, r.or_mask);
 			return 7;
 		case READ_WRITE_MULTIPLE_REGISTERS:
 			// both ranges are checked before anything is written; then write, then read
 			ushort[modbus::MAX_RW_WRITE_REGS] rw_words;
 			ushort[modbus::MAX_RW_READ_REGS] rw_regs;
-			for (usz i = 0; i < r.write_qty; i++) rw_words[i] = (ushort)(((ushort)r.data[i * 2] << 8) | r.data[i * 2 + 1]);
+			pdu::bytes_to_regs(r.data, rw_words[:r.write_qty]);
 			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.write_addr, r.write_qty);
 			if (e == NONE) e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, r.qty);
 			if (e == NONE) e = model.write_holding(unit, r.write_addr, rw_words[:r.write_qty]);
 			if (e == NONE) e = model.read_holding(unit, r.addr, rw_regs[:r.qty]);
 			if (e != NONE) return exception(fc, e, resp);
-			resp[0] = fc;
-			resp[1] = (char)(r.qty * 2);
-			for (usz i = 0; i < r.qty; i++)
-			{
-				resp[2 + i * 2] = (char)(rw_regs[i] >> 8);
-				resp[3 + i * 2] = (char)(rw_regs[i] & 0xFF);
-			}
-			return 2 + (usz)r.qty * 2;
+			return registers_answer(fc, rw_regs[:r.qty], resp);
 		case DIAGNOSTICS:
 			// only sub-function 0x0000 (return query data) is answered
 			if (!config.allow_diagnostics || r.sub != 0) return exception(fc, ExceptionCode.ILLEGAL_FUNCTION, resp);
@@ -444,11 +423,18 @@ fn usz? handle_rtu(ServerConfig* config, DataModel model, char[] frame, char[] o
 fn usz echo(char fc, ushort addr, ushort value, char[] resp) @private
 {
 	resp[0] = fc;
-	resp[1] = (char)(addr >> 8);
-	resp[2] = (char)(addr & 0xFF);
-	resp[3] = (char)(value >> 8);
-	resp[4] = (char)(value & 0xFF);
+	pdu::put16(resp, 1, addr);
+	pdu::put16(resp, 3, value);
 	return 5;
+}
+
+// fc, byte count, registers (the answer of the register read functions).
+fn usz registers_answer(char fc, ushort[] regs, char[] resp) @private
+{
+	resp[0] = fc;
+	resp[1] = (char)(regs.len * 2);
+	pdu::regs_to_bytes(regs, resp[2..]);
+	return 2 + regs.len * 2;
 }
 
 // ---- in-memory register map ----

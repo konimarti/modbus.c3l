@@ -2,6 +2,7 @@ module modbus::pdu;
 
 import std::core::mem;
 import modbus;
+import modbus::data;
 
 // Zero-allocation PDU codec (Modbus Application Protocol 4.1, 6.x, 7). Requests and responses carry
 // wire-format bytes in `data` (borrowed: valid as long as the buffer they were decoded from / built over).
@@ -43,12 +44,13 @@ struct Response
 
 // ---- helpers ----
 
-fn ushort get16(char[] b, usz at) @private
+// Big-endian 16-bit fields (the wire format of every field and register).
+fn ushort get16(char[] b, usz at)
 {
 	return (ushort)(((ushort)b[at] << 8) | b[at + 1]);
 }
 
-fn void put16(char[] b, usz at, ushort v) @private
+fn void put16(char[] b, usz at, ushort v)
 {
 	b[at] = (char)(v >> 8);
 	b[at + 1] = (char)(v & 0xFF);
@@ -59,9 +61,15 @@ fn bool is_bit_read(Fc fc) @private
 	return fc == Fc.READ_COILS || fc == Fc.READ_DISCRETE_INPUTS;
 }
 
-fn bool is_read_fc(Fc fc) @private
+// Registers to big-endian bytes (out holds 2 bytes per register) and back (bytes holds 2 bytes per register of out).
+fn void regs_to_bytes(ushort[] regs, char[] out)
 {
-	return fc == Fc.READ_COILS || fc == Fc.READ_DISCRETE_INPUTS || fc == Fc.READ_HOLDING_REGISTERS || fc == Fc.READ_INPUT_REGISTERS;
+	foreach (i, r : regs) put16(out, (usz)i * 2, r);
+}
+
+fn void bytes_to_regs(char[] bytes, ushort[] out)
+{
+	for (usz i = 0; i < out.len; i++) out[i] = get16(bytes, i * 2);
 }
 
 // Largest quantity of the read functions (MAP 6.1 to 6.4).
@@ -106,13 +114,7 @@ fn Request read_device_id(char code, char object_id)
 fn Request? write_multiple_coils(ushort addr, bool[] bits, char[] scratch)
 {
 	if (bits.len < 1 || bits.len > modbus::MAX_WRITE_BITS) return modbus::BAD_QUANTITY~;
-	usz bytes = (bits.len + 7) / 8;
-	if (scratch.len < bytes) return modbus::BUFFER_TOO_SMALL~;
-	for (usz i = 0; i < bytes; i++) scratch[i] = 0;
-	foreach (i, b : bits)
-	{
-		if (b) scratch[i / 8] |= (char)(1 << (i % 8));
-	}
+	usz bytes = data::pack_coils(bits, scratch)!;
 	return { .fc = (char)Fc.WRITE_MULTIPLE_COILS, .addr = addr, .qty = (ushort)bits.len, .data = scratch[:bytes] };
 }
 
@@ -121,7 +123,7 @@ fn Request? write_multiple_registers(ushort addr, ushort[] regs, char[] scratch)
 {
 	if (regs.len < 1 || regs.len > modbus::MAX_WRITE_REGS) return modbus::BAD_QUANTITY~;
 	if (scratch.len < regs.len * 2) return modbus::BUFFER_TOO_SMALL~;
-	foreach (i, r : regs) put16(scratch, (usz)i * 2, r);
+	regs_to_bytes(regs, scratch);
 	return { .fc = (char)Fc.WRITE_MULTIPLE_REGISTERS, .addr = addr, .qty = (ushort)regs.len, .data = scratch[:regs.len * 2] };
 }
 
@@ -131,7 +133,7 @@ fn Request? read_write_registers(ushort read_addr, ushort read_qty, ushort write
 	if (read_qty < 1 || read_qty > modbus::MAX_RW_READ_REGS) return modbus::BAD_QUANTITY~;
 	if (regs.len < 1 || regs.len > modbus::MAX_RW_WRITE_REGS) return modbus::BAD_QUANTITY~;
 	if (scratch.len < regs.len * 2) return modbus::BUFFER_TOO_SMALL~;
-	foreach (i, r : regs) put16(scratch, (usz)i * 2, r);
+	regs_to_bytes(regs, scratch);
 	return {
 		.fc = (char)Fc.READ_WRITE_MULTIPLE_REGISTERS,
 		.addr = read_addr,
@@ -544,7 +546,7 @@ fn void? Response.copy_regs(&self, ushort[] out)
 {
 	usz n = self.reg_count();
 	if (out.len < n) return modbus::SHORT_REGISTERS~;
-	for (usz i = 0; i < n; i++) out[i] = get16(self.data, i * 2);
+	bytes_to_regs(self.data, out[:n]);
 }
 
 // Copies the first qty coils; SHORT_REGISTERS when `out` is shorter than qty.
