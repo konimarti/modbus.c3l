@@ -62,5 +62,14 @@ check "bad type" 2 "" "$MBTOOL" read "$H" --as f16
 check "bad order" 2 "" "$MBTOOL" read "$H" --as u32 --order XXXX
 check "bad coil value" 2 "" "$MBTOOL" write "$H" --fc coil --addr 0 --allow-write 2
 check "unknown command" 2 "" "$MBTOOL" frobnicate
+# numbers outside the range of their option are usage errors, never wrapped around
+check "addr beyond 32 bits" 2 "" "$MBTOOL" write "$H" --fc register --addr 4294967297 --allow-write 7
+check "register 1 untouched" 0 "0" "$MBTOOL" read "$H" --addr 1
+check "unit beyond 32 bits" 2 "" "$MBTOOL" read "$H" --unit 4294967297
+check "port beyond 32 bits" 2 "" "$MBTOOL" read 127.0.0.1:4294967377 --addr 0
+check "huge count" 2 "" "$MBTOOL" read "$H" --addr 2147483647 --count 2147483647
+check "negative addr" 2 "" "$MBTOOL" read "$H" --addr -1
+check "timeout beyond 32 bits" 2 "" "$MBTOOL" read "$H" --timeout 4294967297
+check "serve size beyond 32 bits" 2 "" "$MBTOOL" serve --port 5030 --coils 4294967297
 [ "$FAILED" = 0 ] && echo "all ok"
 exit "$FAILED"

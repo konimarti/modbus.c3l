@@ -68,6 +68,27 @@ fn long? parse_num(String s)
 	return s.to_long();
 }
 
+// A number within [lo, hi]; anything else (not a number, too big for a long, out of range) is a fault, never wrapped around.
+fn int? parse_int(String s, long lo, long hi)
+{
+	long n = parse_num(s)!;
+	if (n < lo || n > hi) return modbus::BAD_VALUE~;
+	return (int)n;
+}
+
+// parse_int for an option: on failure the message goes to *err.
+fn bool read_int(String name, String text, long lo, long hi, int* out, String* err)
+{
+	int? n = parse_int(text, lo, hi);
+	if (catch n)
+	{
+		*err = string::tformat("%s must be a number from %d to %d, got: %s", name, lo, hi, text);
+		return false;
+	}
+	*out = n;
+	return true;
+}
+
 // HOST or HOST:PORT (IPv6 literals are not supported).
 fn void split_host(String arg, Opts* o)
 {
@@ -75,9 +96,9 @@ fn void split_host(String arg, Opts* o)
 	if (try c = colon)
 	{
 		o.host = arg[:c];
-		long? p = arg[c + 1..].to_long();
-		o.port = -1;
-		if (try v = p) o.port = (int)v;
+		int? p = parse_int(arg[c + 1..], 0, 65535);
+		o.port = -1;                         // bad port: reported when connecting
+		if (try v = p) o.port = v;
 	}
 	else
 	{
@@ -128,7 +149,6 @@ fn bool parse_args(String[] args, Opts* o, String* err)
 				return false;
 			}
 			String v = args[++i];
-			long? n = parse_num(v);
 			switch (a)
 			{
 				case "--fc": o.fc = v;
@@ -136,27 +156,15 @@ fn bool parse_args(String[] args, Opts* o, String* err)
 				case "--order": o.order = v;
 				case "--bind": o.bind = v;
 				case "--unit":
-					if (catch n) { *err = string::tformat("bad number for --unit: %s", v); return false; }
-					o.unit = (int)n;
+					if (!read_int(a, v, 0, 255, &o.unit, err)) return false;
 					o.unit_given = true;
-				case "--addr":
-				case "--count":
-				case "--port":
-				case "--coils":
-				case "--registers":
-				case "--timeout":
-				case "--code":
-					if (catch n) { *err = string::tformat("bad number for %s: %s", a, v); return false; }
-					switch (a)
-					{
-						case "--addr": o.addr = (int)n;
-						case "--count": o.count = (int)n;
-						case "--port": o.port = (int)n;
-						case "--coils": o.coils = (int)n;
-						case "--registers": o.registers = (int)n;
-						case "--timeout": o.timeout_ms = (int)n;
-						default: o.code = (int)n;
-					}
+				case "--addr": if (!read_int(a, v, 0, 65535, &o.addr, err)) return false;
+				case "--count": if (!read_int(a, v, 1, 65536, &o.count, err)) return false;
+				case "--port": if (!read_int(a, v, 0, 65535, &o.port, err)) return false;
+				case "--coils": if (!read_int(a, v, 1, 65536, &o.coils, err)) return false;
+				case "--registers": if (!read_int(a, v, 1, 65536, &o.registers, err)) return false;
+				case "--timeout": if (!read_int(a, v, 1, 3600000, &o.timeout_ms, err)) return false;
+				case "--code": if (!read_int(a, v, 1, 3, &o.code, err)) return false;
 				default:
 					*err = string::tformat("unknown option %s", a);
 					return false;
