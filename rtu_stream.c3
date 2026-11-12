@@ -111,7 +111,7 @@ fn void? RtuClient.broadcast(&self, Request* req)
 // (code in *exc), WRITE_NOT_ALLOWED, TIMEOUT, CLOSED. A frame with a bad CRC is dropped; the request then times out.
 fn Response? RtuClient.call(&self, Request* req, ExceptionCode* exc, int unit = -1)
 {
-	if (unit == 0) return modbus::BAD_VALUE~;
+	if ((unit < 0 ? self.core.config.unit : unit) == 0) return modbus::BAD_VALUE~;    // unit 0 is the broadcast: use broadcast()
 	self.core.send(req, self.clock(), 0, unit)!;
 	char[] out = self.core.output();
 	usz queued = out.len;

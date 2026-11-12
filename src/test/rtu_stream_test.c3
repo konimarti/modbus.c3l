@@ -554,3 +554,24 @@ fn void test_valid_crc_bad_body_is_reported() @test
 		b.client.call(&r, &exc)!!;
 	};
 }
+
+// A configured unit of 0 is the broadcast address: call() must not send a write there and then report a
+// connection error.
+fn void test_default_unit_zero_is_refused() @test
+{
+	@pool()
+	{
+		Bench b;
+		b.setup();
+		defer b.teardown();
+		b.client.core.config.unit = 0;
+		ExceptionCode exc;
+		Request w = pdu::write_single_register(1, 3);
+		assert(@catch(b.client.call(&w, &exc)) == modbus::BAD_VALUE);
+		assert(b.line.len[1] == 0, "nothing was sent");
+		assert(b.map.holding[1] == 0);
+		// an explicit unit still works
+		b.client.call(&w, &exc, 1)!!;
+		assert(b.map.holding[1] == 3);
+	};
+}
