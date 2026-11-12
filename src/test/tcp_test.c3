@@ -885,6 +885,54 @@ fn void test_slow_but_complete_request_is_served() @test
 	};
 }
 
+// The write deadline is for answers that stay unsent: a client that reads what the server has for it is never dropped,
+// however long the exchange lasts. (How much a slow reader frees in the kernel buffers differs between systems, so no
+// test relies on a reader that drains "a little".)
+fn void test_reader_that_takes_its_answers_is_not_dropped() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();
+		TcpTransport t;
+		n.connect(&t);
+		defer (void)t.close();
+		char[] burst = mem::temp_array(char, 12 * 100);
+		for (usz i = 0; i < 100; i++)
+		{
+			usz len = frame::mbap_encode((ushort)(i + 1), 1, support::hx("03 00 00 00 7D"), burst[i * 12..])!!;
+			assert(len == 12);
+		}
+		int sent = 0;
+		while (n.server.blocked_connections() == 0)
+		{
+			assert(sent < 2000, "the server never ran out of room to answer");
+			t.write(burst, time::sec(2))!!;
+			n.step(2);
+			sent++;
+		}
+		// 20 seconds of test time in steps of 4 (the write deadline is 5 s): each time the client reads everything
+		// that has arrived, and the server answers more
+		char[65536] sink;
+		usz total = 0;
+		for (int round = 0; round < 5; round++)
+		{
+			advance(4);
+			while (true)
+			{
+				usz? got = t.read(&sink, time::DURATION_ZERO);
+				if (catch f = got) break;
+				total += got;
+			}
+			n.step(3);
+			assert(n.server.connection_count() == 1, "dropped in round %d although it reads its answers", round);
+		}
+		assert(total > 100 * 259, "the client really received answers (%d bytes)", total);
+	};
+}
+
 // Pipelined requests must be answered in one round, not one output buffer per poll timeout: the server loops
 // while flushing frees room for the requests it already holds.
 fn void test_pipelined_requests_are_answered_in_one_round() @test

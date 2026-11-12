@@ -257,14 +257,15 @@ struct TcpConn
 	Clock blocked_since;     // since when the output has been pending
 	bool blocked;
 	bool partial;            // a request has been started and not finished
-	Clock partial_since;     // when the unfinished request was started (restarts whenever one completes)
-	usz partial_len;
+	Clock partial_since;     // when the unfinished request was started (restarts whenever a request completes)
+	bool completed;          // a request was completed in this round
 }
 
 // Accepts connections (up to 8) and serves each with its own ServerConn, one poll round at a time. No threads:
 // serve_once() is one round, serve() loops over it. Sockets are non-blocking, so one slow client never holds the
 // others up: what the socket does not take stays in the session output, the connection is not read from until
-// it is gone, and it is dropped when its output has been pending for `write_timeout`, however much it drains meanwhile.
+// it is gone, and it is dropped when its output has stayed unsent for `write_timeout` (the timer restarts whenever the output
+// has been written out completely, so a client that reads what it asked for is never dropped).
 // A connection that is silent for `idle_timeout` is dropped too (zero switches that off), which frees its slot:
 // a full server turns new clients away until then.
 struct TcpServer
@@ -382,6 +383,7 @@ fn bool TcpServer.pump_flush(&self, TcpConn* c, Clock now)
 			self.drop(c);
 			return false;
 		}
+		if (handled > 0) c.completed = true;
 		bool had_output = c.session.output().len > 0;
 		if (!self.flush(c, now)) return false;
 		// done when the socket did not take everything, or when there was nothing to flush and nothing was handled:
@@ -416,6 +418,7 @@ fn bool TcpServer.read_some(&self, TcpConn* c, Clock now)
 
 fn void TcpServer.service(&self, TcpConn* c, bool ready, Clock now)
 {
+	c.completed = false;
 	if (ready && c.session.output().len == 0 && !self.read_some(c, now)) return;
 	if (!self.pump_flush(c, now)) return;
 	if (self.write_timeout > time::DURATION_ZERO && c.blocked && since(now, c.blocked_since) > self.write_timeout)
@@ -427,12 +430,13 @@ fn void TcpServer.service(&self, TcpConn* c, bool ready, Clock now)
 	usz pending = c.session.framer.pending();
 	if (c.session.output().len == 0 && pending > 0)
 	{
-		if (!c.partial || pending < c.partial_len)
+		// the timer runs from the start of the unfinished request and restarts whenever a request completes: a client
+		// that keeps sending requests is not slow, whatever length of tail it happens to leave in the buffer
+		if (!c.partial || c.completed)
 		{
 			c.partial = true;
 			c.partial_since = now;
 		}
-		c.partial_len = pending;
 		if (self.read_timeout > time::DURATION_ZERO && since(now, c.partial_since) > self.read_timeout)
 		{
 			self.drop(c);
