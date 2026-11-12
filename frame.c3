@@ -56,6 +56,12 @@ fn void MbapFramer.compact(&self)
 	self.len = pending;
 }
 
+// Bytes taken but not yet returned as a frame.
+fn usz MbapFramer.pending(&self)
+{
+	return self.len - self.start;
+}
+
 fn usz MbapFramer.free_space(&self)
 {
 	return self.buf.len - (self.len - self.start);

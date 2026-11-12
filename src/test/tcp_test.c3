@@ -819,3 +819,99 @@ fn void test_idle_timeout_can_be_switched_off() @test
 		assert(n.server.connection_count() == 1);
 	};
 }
+
+// ---- clients that trickle must not keep a slot either ----
+
+fn void test_trickling_request_is_dropped() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();
+		assert(n.server.read_timeout == time::sec(10), "default read deadline");
+		TcpTransport t;
+		n.connect(&t);
+		defer (void)t.close();
+		char[] req = support::hx("00 01 00 00 00 06 01 03 00 00 00 01");
+		// one byte now, another every 6 s: the request never completes and the idle timer never fires
+		t.write(req[0:1], time::sec(1))!!;
+		n.step(3);
+		for (usz i = 1; i < 6; i++)
+		{
+			advance(6);
+			t.write(req[i:1], time::sec(1))!!;
+			n.step(2);
+			if (n.server.connection_count() == 0) break;
+		}
+		assert(n.server.connection_count() == 0, "a request that takes longer than the read deadline is dropped");
+	};
+}
+
+fn void test_slow_but_complete_request_is_served() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();
+		TcpTransport t;
+		n.connect(&t);
+		defer (void)t.close();
+		char[] req = support::hx("00 01 00 00 00 06 01 03 00 00 00 01");
+		t.write(req[:5], time::sec(1))!!;
+		n.step(3);
+		advance(5);
+		t.write(req[5..], time::sec(1))!!;
+		n.step(3);
+		support::assert_bytes(read_all(&t, 11), "00 01 00 00 00 05 01 03 02 00 00");
+		// the next request starts a new timer: another slow one is fine
+		t.write(req[:5], time::sec(1))!!;
+		n.step(3);
+		advance(8);
+		t.write(req[5..], time::sec(1))!!;
+		n.step(3);
+		assert(read_all(&t, 11).len == 11);
+		assert(n.server.connection_count() == 1);
+	};
+}
+
+// A reader that takes a few bytes now and then: its output has been pending for too long, whatever it takes meanwhile.
+fn void test_slow_drainer_is_dropped() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();
+		TcpTransport bad;
+		n.connect(&bad);
+		defer (void)bad.close();
+		char[] burst = mem::temp_array(char, 12 * 100);
+		for (usz i = 0; i < 100; i++)
+		{
+			usz len = frame::mbap_encode((ushort)(i + 1), 1, support::hx("03 00 00 00 7D"), burst[i * 12..])!!;
+			assert(len == 12);
+		}
+		int sent = 0;
+		while (n.server.blocked_connections() == 0)
+		{
+			assert(sent < 2000, "the server never ran out of room to answer");
+			bad.write(burst, time::sec(2))!!;
+			n.step(2);
+			sent++;
+		}
+		// the client reads a little every 2 s: it makes progress, but its output stays blocked
+		char[2000] sink;
+		for (int i = 0; i < 4; i++)
+		{
+			advance(2);
+			(void)bad.read(&sink, time::ms(20));
+			n.step(2);
+		}
+		assert(n.server.connection_count() == 0, "dropped although it keeps draining a little");
+	};
+}

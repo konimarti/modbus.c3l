@@ -240,14 +240,17 @@ struct TcpConn
 	ServerConn session;
 	bool used;
 	Clock last_active;       // last time bytes arrived or left
-	Clock blocked_since;     // output pending and the socket took nothing since then
+	Clock blocked_since;     // since when the output has been pending
 	bool blocked;
+	bool partial;            // a request has been started and not finished
+	Clock partial_since;     // when the unfinished request was started (restarts whenever one completes)
+	usz partial_len;
 }
 
 // Accepts connections (up to 8) and serves each with its own ServerConn, one poll round at a time. No threads:
 // serve_once() is one round, serve() loops over it. Sockets are non-blocking, so one slow client never holds the
 // others up: what the socket does not take stays in the session output, the connection is not read from until
-// it is gone, and it is dropped when its output makes no progress for `write_timeout`.
+// it is gone, and it is dropped when its output has been pending for `write_timeout`, however much it drains meanwhile.
 // A connection that is silent for `idle_timeout` is dropped too (zero switches that off), which frees its slot:
 // a full server turns new clients away until then.
 struct TcpServer
@@ -258,6 +261,7 @@ struct TcpServer
 	Allocator allocator;
 	Duration write_timeout;  // default 5 s
 	Duration idle_timeout;   // default 60 s
+	Duration read_timeout;   // an unfinished request is dropped after this long, however slowly it grows (default 10 s, zero = off)
 	ClockFn clock;           // monotonic clock; tests replace it
 	TcpConn[MAX_CONNECTIONS] conns;
 }
@@ -272,6 +276,7 @@ fn void? TcpServer.init(&self, TcpServerSocket listener, ServerConfig* config, D
 	self.allocator = allocator;
 	self.write_timeout = time::sec(5);
 	self.idle_timeout = time::sec(60);
+	self.read_timeout = time::sec(10);
 	self.clock = &modbus::real_clock;
 }
 
@@ -337,7 +342,6 @@ fn bool TcpServer.flush(&self, TcpConn* c, Clock now)
 	{
 		c.session.consume_output(n);
 		c.last_active = now;
-		c.blocked_since = now;
 	}
 	if (c.session.output().len == 0)
 	{
@@ -400,6 +404,26 @@ fn void TcpServer.service(&self, TcpConn* c, bool ready, Clock now)
 	{
 		self.drop(c);                       // the peer does not take its answers
 		return;
+	}
+	// a request that is started but not finished: the timer restarts only when a request completes
+	usz pending = c.session.framer.pending();
+	if (c.session.output().len == 0 && pending > 0)
+	{
+		if (!c.partial || pending < c.partial_len)
+		{
+			c.partial = true;
+			c.partial_since = now;
+		}
+		c.partial_len = pending;
+		if (self.read_timeout > time::DURATION_ZERO && since(now, c.partial_since) > self.read_timeout)
+		{
+			self.drop(c);
+			return;
+		}
+	}
+	else
+	{
+		c.partial = false;
 	}
 	if (self.idle_timeout > time::DURATION_ZERO && c.session.output().len == 0 && since(now, c.last_active) > self.idle_timeout)
 	{
