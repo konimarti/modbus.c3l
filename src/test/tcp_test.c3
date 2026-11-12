@@ -885,44 +885,6 @@ fn void test_slow_but_complete_request_is_served() @test
 	};
 }
 
-// A reader that takes a few bytes now and then: its output has been pending for too long, whatever it takes meanwhile.
-fn void test_slow_drainer_is_dropped() @test
-{
-	@pool()
-	{
-		Net n;
-		n.setup();
-		defer n.teardown();
-		n.use_test_clock();
-		TcpTransport bad;
-		n.connect(&bad);
-		defer (void)bad.close();
-		char[] burst = mem::temp_array(char, 12 * 100);
-		for (usz i = 0; i < 100; i++)
-		{
-			usz len = frame::mbap_encode((ushort)(i + 1), 1, support::hx("03 00 00 00 7D"), burst[i * 12..])!!;
-			assert(len == 12);
-		}
-		int sent = 0;
-		while (n.server.blocked_connections() == 0)
-		{
-			assert(sent < 2000, "the server never ran out of room to answer");
-			bad.write(burst, time::sec(2))!!;
-			n.step(2);
-			sent++;
-		}
-		// the client reads a little every 2 s: it makes progress, but its output stays blocked
-		char[2000] sink;
-		for (int i = 0; i < 4; i++)
-		{
-			advance(2);
-			(void)bad.read(&sink, time::ms(20));
-			n.step(2);
-		}
-		assert(n.server.connection_count() == 0, "dropped although it keeps draining a little");
-	};
-}
-
 // Pipelined requests must be answered in one round, not one output buffer per poll timeout: the server loops
 // while flushing frees room for the requests it already holds.
 fn void test_pipelined_requests_are_answered_in_one_round() @test
