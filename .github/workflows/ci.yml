@@ -24,8 +24,10 @@ jobs:
 
       - name: Setup C3
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          VERSION="${{ github.event.inputs.version || env.C3_VERSION }}"
+          VERSION="${INPUT_VERSION:-$C3_VERSION}"
           # /opt is root-owned on hosted runners: unpack below RUNNER_TEMP
           mkdir -p "$RUNNER_TEMP/c3"
           wget -O "$RUNNER_TEMP/c3.tar.gz" "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-linux.tar.gz"
@@ -63,8 +65,10 @@ jobs:
 
       - name: Setup C3
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          VERSION="${{ github.event.inputs.version || env.C3_VERSION }}"
+          VERSION="${INPUT_VERSION:-$C3_VERSION}"
           # unpack below RUNNER_TEMP (not /opt) and put the folder that holds the c3c binary on the PATH
           mkdir -p "$RUNNER_TEMP/c3"
           curl -L -o "$RUNNER_TEMP/c3.zip" "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-macos.zip"
@@ -104,8 +108,10 @@ jobs:
 
       - name: Setup C3
         shell: pwsh
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          $version = "${{ github.event.inputs.version || env.C3_VERSION }}"
+          $version = if ($env:INPUT_VERSION) { $env:INPUT_VERSION } else { $env:C3_VERSION }
           Invoke-WebRequest -Uri "https://github.com/c3lang/c3c/releases/download/$version/c3-windows.zip" -OutFile "$env:RUNNER_TEMP\c3.zip"
           Expand-Archive -Path "$env:RUNNER_TEMP\c3.zip" -DestinationPath "$env:RUNNER_TEMP\c3"
           $dir = Get-ChildItem "$env:RUNNER_TEMP\c3" -Recurse -Filter c3c.exe | Select-Object -First 1
