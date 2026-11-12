@@ -722,7 +722,7 @@ fn void test_slow_reader_does_not_stall_the_server() @test
 		n.setup();
 		defer n.teardown();
 		n.use_test_clock();
-		assert(n.server.write_timeout == time::sec(5), "default write deadline");
+		assert(n.server.write_timeout == time::sec(5) && n.server.idle_timeout == time::sec(60), "defaults");
 		TcpTransport bad;
 		n.connect(&bad);
 		defer (void)bad.close();
@@ -758,5 +758,64 @@ fn void test_slow_reader_does_not_stall_the_server() @test
 		good.write(support::hx("00 02 00 00 00 06 01 03 00 02 00 01"), time::sec(1))!!;
 		n.step(3);
 		support::assert_bytes(read_all(&good, 11), "00 02 00 00 00 05 01 03 02 00 09");
+	};
+}
+
+fn void test_idle_connections_are_dropped() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();
+		n.server.idle_timeout = time::sec(30);
+		TcpTransport[8] idle;
+		for (usz i = 0; i < 8; i++) n.connect(&idle[i]);
+		n.step(10);
+		assert(n.server.connection_count() == 8);
+		// the server is full: a ninth client is turned away
+		TcpTransport late;
+		n.connect(&late);
+		n.step(3);
+		char[8] buf;
+		assert(@catch(late.read(&buf, time::sec(1))) == modbus::CLOSED);
+		// a connection that talks stays; the silent ones go after the idle timeout
+		advance(20);
+		idle[3].write(support::hx("00 01 00 00 00 06 01 03 00 00 00 01"), time::sec(1))!!;
+		n.step(3);
+		assert(read_all(&idle[3], 11).len == 11);
+		assert(n.server.connection_count() == 8);
+		advance(20);
+		n.step(2);
+		assert(n.server.connection_count() == 1, "only the client that was active 20 s ago is left");
+		// and the server takes new clients again
+		TcpTransport again;
+		n.connect(&again);
+		again.write(support::hx("00 05 00 00 00 06 01 03 00 00 00 01"), time::sec(1))!!;
+		n.step(4);
+		assert(read_all(&again, 11).len == 11);
+		for (usz i = 0; i < 8; i++) (void)idle[i].close();
+		(void)late.close();
+		(void)again.close();
+	};
+}
+
+fn void test_idle_timeout_can_be_switched_off() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();
+		n.server.idle_timeout = time::DURATION_ZERO;
+		TcpTransport t;
+		n.connect(&t);
+		defer (void)t.close();
+		n.step(3);
+		advance(100000);
+		n.step(3);
+		assert(n.server.connection_count() == 1);
 	};
 }

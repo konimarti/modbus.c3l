@@ -252,6 +252,7 @@ struct TcpConn
 	TcpTransport io;
 	ServerConn session;
 	bool used;
+	Clock last_active;       // last time bytes arrived or left
 	Clock blocked_since;     // output pending and the socket took nothing since then
 	bool blocked;
 }
@@ -260,6 +261,8 @@ struct TcpConn
 // serve_once() is one round, serve() loops over it. Sockets are non-blocking, so one slow client never holds the
 // others up: what the socket does not take stays in the session output, the connection is not read from until
 // it is gone, and it is dropped when its output makes no progress for `write_timeout`.
+// A connection that is silent for `idle_timeout` is dropped too (zero switches that off), which frees its slot:
+// a full server turns new clients away until then.
 struct TcpServer
 {
 	TcpServerSocket listener;
@@ -267,6 +270,7 @@ struct TcpServer
 	DataModel model;
 	Allocator allocator;
 	Duration write_timeout;  // default 5 s
+	Duration idle_timeout;   // default 60 s
 	ClockFn clock;           // monotonic clock; tests replace it
 	TcpConn[MAX_CONNECTIONS] conns;
 }
@@ -280,6 +284,7 @@ fn void? TcpServer.init(&self, TcpServerSocket listener, ServerConfig* config, D
 	self.model = model;
 	self.allocator = allocator;
 	self.write_timeout = time::sec(5);
+	self.idle_timeout = time::sec(60);
 	self.clock = &real_clock;
 }
 
@@ -344,6 +349,7 @@ fn bool TcpServer.flush(&self, TcpConn* c, Clock now)
 	if (n > 0)
 	{
 		c.session.consume_output(n);
+		c.last_active = now;
 		c.blocked_since = now;
 	}
 	if (c.session.output().len == 0)
@@ -389,6 +395,7 @@ fn bool TcpServer.read_some(&self, TcpConn* c, Clock now)
 		self.drop(c);
 		return false;
 	}
+	c.last_active = now;
 	usz? taken = c.session.feed(buf[:n]);
 	if (catch f = taken)
 	{
@@ -406,6 +413,10 @@ fn void TcpServer.service(&self, TcpConn* c, bool ready, Clock now)
 	{
 		self.drop(c);                       // the peer does not take its answers
 		return;
+	}
+	if (self.idle_timeout > time::DURATION_ZERO && c.session.output().len == 0 && since(now, c.last_active) > self.idle_timeout)
+	{
+		self.drop(c);                       // silent for too long: give the slot back
 	}
 }
 
@@ -447,6 +458,7 @@ fn void? TcpServer.serve_once(&self, Duration timeout)
 				if (@ok(slot.io.set_non_blocking()))
 				{
 					slot.used = true;
+					slot.last_active = now;
 					slot.blocked = false;
 				}
 				else

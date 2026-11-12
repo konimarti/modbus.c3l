@@ -70,6 +70,12 @@ Exit codes: 0 ok, 1 error or timeout, 2 usage error or refused write, 3 Modbus e
 127.0.0.1 unless `--bind` is given and is read-only without `--allow-write`. `tools/smoke.sh` and `tools/cli-test.sh`
 run the tool against its own server.
 
+## Server limits
+
+`TcpServer` serves up to 8 connections at a time with non-blocking sockets. A connection whose answers are not taken for
+`write_timeout` (default 5 s) is dropped, and so is a connection that is silent for `idle_timeout` (default 60 s, zero
+switches it off). A full server turns new clients away until a slot is free.
+
 ## Things to know about real devices
 
 - Addresses are 0-based protocol addresses. Vendor documents often use 1-based numbers or 4xxxx/3xxxx references:
