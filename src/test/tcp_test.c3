@@ -947,3 +947,28 @@ fn void test_pipelined_requests_are_answered_in_one_round() @test
 		}
 	};
 }
+
+// After a failed accept (out of file descriptors) the listener is left alone for a moment: it stays readable and
+// would make serve() spin. Here the back-off is set by hand, as the failure cannot be provoked portably.
+fn void test_listener_is_skipped_during_the_accept_back_off() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();
+		n.server.accept_retry_at = (Clock)(srv_now + 100000000);     // 100 ms from now
+		TcpTransport t;
+		n.connect(&t);
+		defer (void)t.close();
+		n.step(3);
+		assert(n.server.connection_count() == 0, "not accepted while backing off");
+		advance(1);
+		n.step(3);
+		assert(n.server.connection_count() == 1, "accepted once the back-off is over");
+		t.write(support::hx("00 01 00 00 00 06 01 03 00 00 00 01"), time::sec(1))!!;
+		n.step(3);
+		assert(read_all(&t, 11).len == 11);
+	};
+}

@@ -263,6 +263,7 @@ struct TcpServer
 	Duration idle_timeout;   // default 60 s
 	Duration read_timeout;   // an unfinished request is dropped after this long, however slowly it grows (default 10 s, zero = off)
 	ClockFn clock;           // monotonic clock; tests replace it
+	Clock accept_retry_at;   // after a failed accept the listener is left alone until then (100 ms)
 	TcpConn[MAX_CONNECTIONS] conns;
 }
 
@@ -439,7 +440,9 @@ fn void? TcpServer.serve_once(&self, Duration timeout)
 {
 	Poll[1 + MAX_CONNECTIONS] polls;
 	usz[1 + MAX_CONNECTIONS] owner;
-	polls[0] = { .socket = self.listener.sock, .events = PollSubscribe.READ };
+	// a failed accept (out of file descriptors) leaves the listener readable: skip it for a moment, or serve() spins
+	bool listening = (long)self.clock() >= (long)self.accept_retry_at;
+	polls[0] = { .socket = self.listener.sock, .events = listening ? PollSubscribe.READ : (PollSubscribe)0 };
 	usz n = 1;
 	foreach (i, &c : self.conns)
 	{
@@ -452,11 +455,16 @@ fn void? TcpServer.serve_once(&self, Duration timeout)
 	}
 	ulong ready = net::poll(polls[:n], sanitize(timeout))!;
 	Clock now = self.clock();
-	if ((ushort)polls[0].revents != 0)
+	if (listening && (ushort)polls[0].revents != 0)
 	{
 		TcpSocket? s = tcp::accept(&self.listener);
-		if (try accepted = s)
+		if (catch f = s)
 		{
+			self.accept_retry_at = now.add_duration(time::ms(100));
+		}
+		else
+		{
+			TcpSocket accepted = s;
 			TcpConn* slot = null;
 			foreach (&c : self.conns)
 			{
