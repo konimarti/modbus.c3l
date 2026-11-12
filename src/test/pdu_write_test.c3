@@ -1,18 +1,8 @@
 module modbus::pdu_write_test;
 
-import std::core::mem;
 import modbus;
 import modbus::pdu;
 import modbus::support;
-
-// Hex head followed by n zero bytes.
-fn char[] padded(String head, usz n)
-{
-	char[] h = support::hx(head);
-	char[] all = mem::temp_array(char, (sz)(h.len + n));
-	mem::copy(all.ptr, h.ptr, (sz)h.len);
-	return all;
-}
 
 // Fault of decoding a request; the test fails when decoding succeeds.
 fn fault dec_fault(char[] pdu)
@@ -208,11 +198,11 @@ fn void test_fc15_limits() @test
 	@pool()
 	{
 		assert(dec_fault(support::hx("0F 00 00 00 00 00")) == modbus::BAD_QUANTITY);               // L11
-		assert(dec_fault(padded("0F 00 00 07 B1 F7", 247)) == modbus::BAD_QUANTITY);               // L12
+		assert(dec_fault(support::padded("0F 00 00 07 B1 F7", 247)) == modbus::BAD_QUANTITY);               // L12
 		assert(dec_fault(support::hx("0F 00 00 00 0A 01 FF")) == modbus::BAD_BYTE_COUNT);          // L13
 		assert(dec_fault(support::hx("0F 00 00 00 0A 03 FF FF FF")) == modbus::BAD_BYTE_COUNT);    // L14
-		assert(pdu::decode_request(padded("0F 00 00 07 B0 F6", 246))!!.qty == 1968);               // largest legal
-		assert(dec_fault(padded("0F FF FF 00 02 01", 1)) == modbus::BAD_ADDRESS_RANGE);
+		assert(pdu::decode_request(support::padded("0F 00 00 07 B0 F6", 246))!!.qty == 1968);               // largest legal
+		assert(dec_fault(support::padded("0F FF FF 00 02 01", 1)) == modbus::BAD_ADDRESS_RANGE);
 		// byte count and quantity agree but the PDU is cut / has an extra byte
 		assert(dec_fault(support::hx("0F 00 00 00 0A 02 FF")) == modbus::TRUNCATED);
 		assert(dec_fault(support::hx("0F 00 00 00 0A 02 FF FF 00")) == modbus::BAD_LENGTH);
@@ -225,13 +215,13 @@ fn void test_fc16_limits() @test
 	{
 		assert(dec_fault(support::hx("10 00 00 00 00 00")) == modbus::BAD_QUANTITY);               // L15
 		// L16: 124 registers need a 254-byte PDU, longer than the 253-byte limit: rejected for its length (answer 03)
-		assert(dec_fault(padded("10 00 00 00 7C F8", 248)) == modbus::BAD_LENGTH);
+		assert(dec_fault(support::padded("10 00 00 00 7C F8", 248)) == modbus::BAD_LENGTH);
 		assert(pdu::fault_to_exception(modbus::BAD_LENGTH) == ExceptionCode.ILLEGAL_DATA_VALUE);
 		assert(dec_fault(support::hx("10 00 00 00 7C 04 00 01 00 02")) == modbus::BAD_QUANTITY);
 		assert(dec_fault(support::hx("10 00 00 00 02 03 00 01 00")) == modbus::BAD_BYTE_COUNT);    // L17
 		assert(dec_fault(support::hx("10 00 00 00 02 04 00 01")) == modbus::TRUNCATED);            // L18
 		assert(dec_fault(support::hx("10 00 00 00 02 04 00 01 00 02 00")) == modbus::BAD_LENGTH);  // L19
-		assert(pdu::decode_request(padded("10 00 00 00 7B F6", 246))!!.qty == 123);
+		assert(pdu::decode_request(support::padded("10 00 00 00 7B F6", 246))!!.qty == 123);
 		assert(dec_fault(support::hx("10 FF FF 00 02 04 00 01 00 02")) == modbus::BAD_ADDRESS_RANGE);
 		assert(pdu::decode_request(support::hx("10 FF FE 00 02 04 00 01 00 02"))!!.addr == 0xFFFE);
 		assert(dec_fault(support::hx("10 00")) == modbus::SHORT_FRAME);
@@ -244,13 +234,13 @@ fn void test_fc23_limits() @test
 	{
 		assert(dec_fault(support::hx("17 00 00 00 7E 00 00 00 01 02 00 01")) == modbus::BAD_QUANTITY);   // L20
 		// L21: write quantity 122 needs a 254-byte PDU: rejected for its length (answer 03)
-		assert(dec_fault(padded("17 00 00 00 01 00 00 00 7A F4", 244)) == modbus::BAD_LENGTH);
+		assert(dec_fault(support::padded("17 00 00 00 01 00 00 00 7A F4", 244)) == modbus::BAD_LENGTH);
 		assert(dec_fault(support::hx("17 00 00 00 01 00 00 00 7A 02 00 01")) == modbus::BAD_QUANTITY);
 		assert(dec_fault(support::hx("17 00 00 00 01 00 00 00 01 04 00 01")) == modbus::TRUNCATED);      // L22 (byte count 4, 2 bytes)
 		assert(dec_fault(support::hx("17 00 00 00 01 00 00 00 01 04 00 01 00 02")) == modbus::BAD_BYTE_COUNT);
 		assert(dec_fault(support::hx("17 00 00 00 00 00 00 00 01 02 00 01")) == modbus::BAD_QUANTITY);   // read qty 0
 		assert(dec_fault(support::hx("17 00 00 00 01 00 00 00 00 00")) == modbus::BAD_QUANTITY);         // write qty 0
-		assert(pdu::decode_request(padded("17 00 00 00 7D 00 00 00 79 F2", 242))!!.write_qty == 121);
+		assert(pdu::decode_request(support::padded("17 00 00 00 7D 00 00 00 79 F2", 242))!!.write_qty == 121);
 		assert(dec_fault(support::hx("17 FF FF 00 02 00 00 00 01 02 00 01")) == modbus::BAD_ADDRESS_RANGE);
 		assert(dec_fault(support::hx("17 00 00 00 01 FF FF 00 02 04 00 01 00 02")) == modbus::BAD_ADDRESS_RANGE);
 		assert(dec_fault(support::hx("17 00 00 00 01 00 00 00 01")) == modbus::SHORT_FRAME);
