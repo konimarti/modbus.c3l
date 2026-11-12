@@ -67,9 +67,12 @@ struct Client
 	fault broken_fault;
 }
 
-fn bool is_write_fc(char code) @private
+// Writes, and the diagnostics sub-functions that change the device (restart, listen only, clear counters):
+// only return query data (sub-function 0) is harmless.
+fn bool needs_write(Request* req) @private
 {
-	Fc fc = (Fc)code;
+	Fc fc = (Fc)req.fc;
+	if (fc == Fc.DIAGNOSTICS) return req.sub != 0;
 	return fc == Fc.WRITE_SINGLE_COIL || fc == Fc.WRITE_SINGLE_REGISTER || fc == Fc.WRITE_MULTIPLE_COILS
 		|| fc == Fc.WRITE_MULTIPLE_REGISTERS || fc == Fc.MASK_WRITE_REGISTER || fc == Fc.READ_WRITE_MULTIPLE_REGISTERS;
 }
@@ -127,10 +130,10 @@ fn ushort? Client.send(&self, Request* req, Clock now, ulong cookie = 0, int uni
 	char u = unit < 0 ? self.config.unit : (char)unit;
 	char[modbus::MAX_PDU] pdu_buf;
 	usz n = pdu::encode_request(req, &pdu_buf)!;
-	if (is_write_fc(req.fc) && !self.config.allow_write) return modbus::WRITE_NOT_ALLOWED~;
+	if (needs_write(req) && !self.config.allow_write) return modbus::WRITE_NOT_ALLOWED~;
 	bool rtu = self.config.framing == RTU;
 	bool broadcast = rtu && u == 0;
-	if (broadcast && !is_write_fc(req.fc)) return modbus::BAD_VALUE~;   // only writes can be broadcast
+	if (broadcast && !needs_write(req)) return modbus::BAD_VALUE~;   // only writes can be broadcast
 	Pending* slot = null;
 	if (!broadcast)
 	{

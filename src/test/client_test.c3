@@ -846,3 +846,32 @@ fn void test_init_failure_releases_the_slots() @test
 	c.free();
 	assert(enough.live == 0);
 }
+
+// FC 8 sub-functions other than 0 change device state (restart, listen only, clear counters): they need allow_write.
+fn void test_diagnostics_side_effects_need_allow_write() @test
+{
+	@pool()
+	{
+		Client c;
+		c.init(cfg(), mem)!!;
+		defer c.free();
+		ushort[4] subs = { 0x0001, 0x0004, 0x000A, 0x0002 };
+		foreach (s : subs)
+		{
+			Request r = { .fc = (char)Fc.DIAGNOSTICS, .sub = s, .data = support::hx("00 00") };
+			assert(@catch(c.send(&r, at(0))) == modbus::WRITE_NOT_ALLOWED, "sub-function %d", s);
+		}
+		assert(c.output().len == 0 && c.pending_count() == 0);
+		// return query data only echoes: allowed
+		Request echo = { .fc = (char)Fc.DIAGNOSTICS, .sub = 0, .data = support::hx("A5 37") };
+		assert(c.send(&echo, at(0))!! == 1);
+		// with the guard open the side-effect functions go out
+		Client d;
+		ClientConfig k = cfg();
+		k.allow_write = true;
+		d.init(k, mem)!!;
+		defer d.free();
+		Request restart = { .fc = (char)Fc.DIAGNOSTICS, .sub = 1, .data = support::hx("00 00") };
+		assert(d.send(&restart, at(0))!! == 1);
+	};
+}
