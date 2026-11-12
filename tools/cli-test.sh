@@ -25,6 +25,8 @@ check() {
 	name=$1; want_rc=$2; want_out=$3; shift 3
 	out=$("$@" 2>"$LOGS/err")
 	rc=$?
+	# the Windows binary writes CRLF line ends to a pipe: compare the text without them
+	out=$(printf '%s' "$out" | tr -d '\r')
 	if [ "$rc" != "$want_rc" ] || [ "$out" != "$want_out" ]; then
 		echo "FAIL $name: exit $rc (want $want_rc), output '$out' (want '$want_out')"
 		sed 's/^/    stderr: /' "$LOGS/err"
@@ -47,7 +49,7 @@ check "read coil" 0 "1" "$MBTOOL" read "$H" --fc coils --count 1
 check "float word orders" 0 "1 1" sh -c "$MBTOOL write $H --fc registers --addr 20 --allow-write 0x3F80 0 0 0x3F80 >/dev/null && echo \"\$($MBTOOL read $H --addr 20 --count 2 --as f32 --order ABCD | cut -d' ' -f1) \$($MBTOOL read $H --addr 22 --count 2 --as f32 --order CDAB)\""
 check "u32" 0 "65538" "$MBTOOL" read "$H" --addr 10 --count 2 --as u32 --order ABCD
 check "negative register" 0 "-2" sh -c "$MBTOOL write $H --fc register --addr 30 --allow-write -2 >/dev/null && $MBTOOL read $H --addr 30 --as i16"
-check "long read is split" 0 "ok" sh -c "$MBTOOL read $H --addr 0 --count 300 | wc -w | grep -qx 300 && echo ok"
+check "long read is split" 0 "ok" sh -c "[ \$($MBTOOL read $H --addr 0 --count 300 | wc -w | tr -d ' \r') = 300 ] && echo ok"
 check "unmapped address" 3 "" "$MBTOOL" read "$H" --addr 5000
 check "read-only server" 3 "" "$MBTOOL" write "$R" --addr 0 --allow-write 5
 check "read-only server reads" 0 "0" "$MBTOOL" read "$R" --addr 0
