@@ -117,6 +117,7 @@ struct BlockingClient
 
 fn void? BlockingClient.init(&self, Transport transport, ClientConfig config, Allocator allocator)
 {
+	if (config.framing != TCP) return modbus::BAD_VALUE~;     // this client reads a byte stream of MBAP frames
 	*self = {};
 	self.transport = transport;
 	self.clock = &real_clock;

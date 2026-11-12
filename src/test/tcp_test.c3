@@ -681,3 +681,14 @@ fn void test_device_id_over_sockets() @test
 		assert(got[0].value == "ACME" && got[2].id == 2 && got[2].value == "1.0");
 	};
 }
+
+// The blocking client speaks MBAP over a byte stream: an RTU configuration is refused at init, not at every call.
+fn void test_blocking_client_refuses_rtu_framing() @test
+{
+	String[1] replies = { "" };
+	Script s = { .replies = &replies };
+	BlockingClient bc;
+	ClientConfig k = client::default_config();
+	k.framing = RTU;
+	assert(@catch(bc.init((Transport)&s, k, mem)) == modbus::BAD_VALUE);
+}
