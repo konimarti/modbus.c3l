@@ -692,3 +692,71 @@ fn void test_blocking_client_refuses_rtu_framing() @test
 	k.framing = RTU;
 	assert(@catch(bc.init((Transport)&s, k, mem)) == modbus::BAD_VALUE);
 }
+
+// ---- a stalled or idle client must not hold the server up ----
+
+long srv_now = 0;
+
+fn Clock srv_clock()
+{
+	return (Clock)srv_now;
+}
+
+// Moves the test clock of the server forward.
+fn void advance(long seconds)
+{
+	srv_now += seconds * 1000000000;
+}
+
+fn void Net.use_test_clock(&self)
+{
+	srv_now = 1000000000;
+	self.server.clock = &srv_clock;
+}
+
+fn void test_slow_reader_does_not_stall_the_server() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();
+		assert(n.server.write_timeout == time::sec(5), "default write deadline");
+		TcpTransport bad;
+		n.connect(&bad);
+		defer (void)bad.close();
+		// a client that asks for 125 registers over and over and never reads an answer
+		char[] burst = mem::temp_array(char, 12 * 100);
+		for (usz i = 0; i < 100; i++)
+		{
+			usz len = frame::mbap_encode((ushort)(i + 1), 1, support::hx("03 00 00 00 7D"), burst[i * 12..])!!;
+			assert(len == 12);
+		}
+		int sent = 0;
+		while (n.server.blocked_connections() == 0)
+		{
+			assert(sent < 2000, "the server never ran out of room to answer: raise the limit");
+			bad.write(burst, time::sec(2))!!;
+			n.step(2);
+			sent++;
+		}
+		// the server did not wait for the slow reader: a second client is served in the very next rounds
+		TcpTransport good;
+		n.connect(&good);
+		defer (void)good.close();
+		good.write(support::hx("00 01 00 00 00 06 01 06 00 02 00 09"), time::sec(1))!!;
+		n.step(4);
+		support::assert_bytes(read_all(&good, 12), "00 01 00 00 00 06 01 06 00 02 00 09");
+		assert(n.map.holding[2] == 9);
+		assert(n.server.connection_count() == 2, "the slow reader is still connected until its deadline");
+		// once its output has stayed blocked past the write deadline the connection is dropped
+		advance(10);
+		n.step(2);
+		assert(n.server.connection_count() == 1);
+		assert(n.server.blocked_connections() == 0);
+		good.write(support::hx("00 02 00 00 00 06 01 03 00 02 00 01"), time::sec(1))!!;
+		n.step(3);
+		support::assert_bytes(read_all(&good, 11), "00 02 00 00 00 05 01 03 02 00 09");
+	};
+}

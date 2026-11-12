@@ -1,5 +1,6 @@
 module modbus::tcp;
 
+import std::io;
 import std::net;
 import std::net::os;
 import std::time;
@@ -89,6 +90,26 @@ fn void? TcpTransport.write(&self, char[] data, Duration timeout) @dynamic
 		if (n <= 0) return modbus::CLOSED~;
 		rest = rest[(usz)n..];
 	}
+}
+
+// Non-blocking mode, for sockets that a single-threaded server serves.
+fn void? TcpTransport.set_non_blocking(&self)
+{
+	self.socket.sock.set_non_blocking(true)!;
+}
+
+// One send of what the socket takes right now: the number of bytes written, 0 when it has no room
+// (a non-blocking socket) or the call was interrupted. CLOSED on any other error.
+fn usz? TcpTransport.write_some(&self, char[] data)
+{
+	if (!self.open) return modbus::CLOSED~;
+	sz? n = self.socket.write(data);
+	if (catch f = n)
+	{
+		if (f == io::WOULD_BLOCK || f == io::INTERRUPTED) return 0;
+		return modbus::CLOSED~;
+	}
+	return n < 0 ? 0 : (usz)n;
 }
 
 fn void? TcpTransport.close(&self) @dynamic
@@ -231,17 +252,22 @@ struct TcpConn
 	TcpTransport io;
 	ServerConn session;
 	bool used;
+	Clock blocked_since;     // output pending and the socket took nothing since then
+	bool blocked;
 }
 
 // Accepts connections (up to 8) and serves each with its own ServerConn, one poll round at a time. No threads:
-// serve_once() is one round, serve() loops over it.
+// serve_once() is one round, serve() loops over it. Sockets are non-blocking, so one slow client never holds the
+// others up: what the socket does not take stays in the session output, the connection is not read from until
+// it is gone, and it is dropped when its output makes no progress for `write_timeout`.
 struct TcpServer
 {
 	TcpServerSocket listener;
 	ServerConfig* config;
 	DataModel model;
 	Allocator allocator;
-	Duration write_timeout;
+	Duration write_timeout;  // default 5 s
+	ClockFn clock;           // monotonic clock; tests replace it
 	TcpConn[MAX_CONNECTIONS] conns;
 }
 
@@ -253,7 +279,8 @@ fn void? TcpServer.init(&self, TcpServerSocket listener, ServerConfig* config, D
 	self.config = config;
 	self.model = model;
 	self.allocator = allocator;
-	self.write_timeout = time::sec(1);
+	self.write_timeout = time::sec(5);
+	self.clock = &real_clock;
 }
 
 // Closes every connection and the listener.
@@ -276,6 +303,17 @@ fn usz TcpServer.connection_count(&self)
 	return n;
 }
 
+// Connections with answers the socket has not taken yet.
+fn usz TcpServer.blocked_connections(&self)
+{
+	usz n = 0;
+	foreach (&c : self.conns)
+	{
+		if (c.used && c.session.output().len > 0) n++;
+	}
+	return n;
+}
+
 fn void TcpServer.drop(&self, TcpConn* c)
 {
 	c.session.free();
@@ -283,60 +321,91 @@ fn void TcpServer.drop(&self, TcpConn* c)
 	c.used = false;
 }
 
-// Feeds what arrived, answers every complete request, writes the answers. A fault drops the connection.
-fn void TcpServer.service(&self, TcpConn* c)
+fn Duration since(Clock now, Clock then) @private
 {
-	char[2048] buf;
-	usz? n = c.io.read(&buf, time::DURATION_ZERO);
+	return now.nano_diff(then).to_duration();
+}
+
+// Hands the socket what it takes. false: the connection was dropped.
+fn bool TcpServer.flush(&self, TcpConn* c, Clock now)
+{
+	char[] out = c.session.output();
+	if (out.len == 0)
+	{
+		c.blocked = false;
+		return true;
+	}
+	usz? n = c.io.write_some(out);
 	if (catch f = n)
 	{
-		if (!is_timeout(f)) self.drop(c);
-		return;
+		self.drop(c);
+		return false;
 	}
-	char[] rest = buf[:n];
+	if (n > 0)
+	{
+		c.session.consume_output(n);
+		c.blocked_since = now;
+	}
+	if (c.session.output().len == 0)
+	{
+		c.blocked = false;
+		return true;
+	}
+	if (!c.blocked)
+	{
+		c.blocked = true;
+		c.blocked_since = now;
+	}
+	return true;
+}
+
+// Answers the buffered requests and writes the answers while the socket takes them. false: dropped.
+fn bool TcpServer.pump_flush(&self, TcpConn* c, Clock now)
+{
 	while (true)
 	{
-		usz taken = 0;
-		usz handled = 0;
-		if (rest.len > 0)
+		usz? handled = c.session.pump();
+		if (catch f = handled)
 		{
-			usz? t = c.session.feed(rest);
-			if (catch f = t)
-			{
-				self.drop(c);
-				return;
-			}
-			taken = t;
-			rest = rest[taken..];
+			self.drop(c);
+			return false;
 		}
-		else
-		{
-			usz? h = c.session.pump();
-			if (catch f = h)
-			{
-				self.drop(c);
-				return;
-			}
-			handled = h;
-		}
-		char[] out = c.session.output();
-		usz wrote = out.len;
-		if (wrote > 0)
-		{
-			if (catch f = c.io.write(out, self.write_timeout))
-			{
-				self.drop(c);
-				return;
-			}
-			c.session.consume_output(wrote);
-		}
-		bool progress = taken > 0 || handled > 0 || wrote > 0;
-		if (rest.len == 0 && !progress) return;
-		if (rest.len > 0 && !progress)
-		{
-			self.drop(c);                    // bytes nobody can take: a broken peer
-			return;
-		}
+		if (!self.flush(c, now)) return false;
+		if (c.session.output().len > 0 || handled == 0) return true;
+	}
+}
+
+// Reads what is there (never more than the session can buffer) and feeds it. false: dropped.
+fn bool TcpServer.read_some(&self, TcpConn* c, Clock now)
+{
+	usz room = c.session.framer.free_space();
+	if (room == 0) return true;
+	char[2048] buf;
+	if (room > buf.len) room = buf.len;
+	usz? n = c.io.read(buf[:room], time::DURATION_ZERO);
+	if (catch f = n)
+	{
+		if (is_timeout(f)) return true;
+		self.drop(c);
+		return false;
+	}
+	usz? taken = c.session.feed(buf[:n]);
+	if (catch f = taken)
+	{
+		self.drop(c);
+		return false;
+	}
+	return true;
+}
+
+fn void TcpServer.service(&self, TcpConn* c, bool ready, Clock now)
+{
+	if (ready && c.session.output().len == 0 && !self.read_some(c, now)) return;
+	if (!self.pump_flush(c, now)) return;
+	if (c.blocked && since(now, c.blocked_since) > self.write_timeout)
+	{
+		self.drop(c);                       // the peer does not take its answers
+		return;
 	}
 }
 
@@ -350,12 +419,14 @@ fn void? TcpServer.serve_once(&self, Duration timeout)
 	foreach (i, &c : self.conns)
 	{
 		if (!c.used) continue;
-		polls[n] = { .socket = c.io.socket.sock, .events = PollSubscribe.READ };
+		// a connection with pending answers is watched for room to write, not for more requests
+		PollSubscribe what = c.session.output().len > 0 ? PollSubscribe.WRITE : PollSubscribe.READ;
+		polls[n] = { .socket = c.io.socket.sock, .events = what };
 		owner[n] = (usz)i;
 		n++;
 	}
 	ulong ready = net::poll(polls[:n], sanitize(timeout))!;
-	if (ready == 0) return;
+	Clock now = self.clock();
 	if ((ushort)polls[0].revents != 0)
 	{
 		TcpSocket? s = tcp::accept(&self.listener);
@@ -373,7 +444,16 @@ fn void? TcpServer.serve_once(&self, Duration timeout)
 			if (slot && @ok(slot.session.init(self.config, self.model, self.allocator)))
 			{
 				slot.io.adopt(accepted);
-				slot.used = true;
+				if (@ok(slot.io.set_non_blocking()))
+				{
+					slot.used = true;
+					slot.blocked = false;
+				}
+				else
+				{
+					slot.session.free();
+					(void)slot.io.close();
+				}
 			}
 			else
 			{
@@ -382,11 +462,11 @@ fn void? TcpServer.serve_once(&self, Duration timeout)
 			}
 		}
 	}
-	for (usz k = 1; k < n; k++)
+	bool[1 + MAX_CONNECTIONS] hit;
+	for (usz k = 1; k < n; k++) hit[owner[k]] = (ushort)polls[k].revents != 0;
+	foreach (i, &c : self.conns)
 	{
-		if ((ushort)polls[k].revents == 0) continue;
-		TcpConn* c = &self.conns[owner[k]];
-		if (c.used) self.service(c);
+		if (c.used) self.service(c, hit[i], now);
 	}
 }
 
