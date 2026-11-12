@@ -175,8 +175,8 @@ fn void? check_request(Request* req) @private
 			if (req.data.len != (usz)req.write_qty * 2) return modbus::BAD_BYTE_COUNT~;
 			if (!range_ok(req.addr, req.qty) || !range_ok(req.write_addr, req.write_qty)) return modbus::BAD_ADDRESS_RANGE~;
 		case DIAGNOSTICS:
-			// data is N x 2 bytes, at least 2
-			if (req.data.len < 2 || req.data.len % 2 != 0) return modbus::BAD_LENGTH~;
+			// data is N x 2 bytes, at least 2 and at most 250 (the PDU is at most 253 bytes)
+			if (req.data.len < 2 || req.data.len > 250 || req.data.len % 2 != 0) return modbus::BAD_LENGTH~;
 		case REPORT_SERVER_ID:
 			return;
 		case ENCAPSULATED_INTERFACE:
@@ -378,7 +378,7 @@ fn usz? encode_response(Response* rsp, char[] out)
 			put16(out, 3, rsp.and_mask);
 			put16(out, 5, rsp.or_mask);
 		case DIAGNOSTICS:
-			if (rsp.data.len < 2 || rsp.data.len % 2 != 0) return modbus::BAD_LENGTH~;
+			if (rsp.data.len < 2 || rsp.data.len > 250 || rsp.data.len % 2 != 0) return modbus::BAD_LENGTH~;
 			total = 3 + rsp.data.len;
 			if (out.len < total) return modbus::BUFFER_TOO_SMALL~;
 			put16(out, 1, rsp.sub);

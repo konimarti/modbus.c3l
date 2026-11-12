@@ -218,3 +218,19 @@ fn void test_object_iter_truncated() @test
 		assert(@catch(it.next(&o)) == modbus::TRUNCATED);
 	};
 }
+
+fn void test_fc8_payload_limited_by_max_pdu() @test
+{
+	char[252] too_long;
+	char[250] longest;
+	char[260] out;
+	Request r = { .fc = (char)Fc.DIAGNOSTICS, .sub = 0, .data = &too_long };
+	assert(@catch(pdu::encode_request(&r, &out)) == modbus::BAD_LENGTH);
+	r.data = &longest;
+	assert(pdu::encode_request(&r, &out)!! == 253);
+	assert(pdu::decode_request(out[:253])!!.data.len == 250);
+	Response rsp = { .fc = (char)Fc.DIAGNOSTICS, .sub = 0, .data = &too_long };
+	assert(@catch(pdu::encode_response(&rsp, &out)) == modbus::BAD_LENGTH);
+	rsp.data = &longest;
+	assert(pdu::encode_response(&rsp, &out)!! == 253);
+}
