@@ -22,11 +22,6 @@ fn ushort ref_crc(char[] data)
 	return crc;
 }
 
-fn void test_version() @test
-{
-	assert(modbus::VERSION == "0.1.0");
-}
-
 // ---- CRC-16 (R0, R1, R2 and more) ----
 
 fn void test_crc16_check_value() @test

@@ -1,6 +1,5 @@
 module modbus;
 
-import std::core::env;
 import std::time;
 
 // Shared constants, enums and faults of modbus.c3l.
@@ -86,8 +85,8 @@ const ushort MAX_RW_WRITE_REGS = 121;   // FC 23 write part (0x79)
 
 fn bool is_exception_fc(char fc) @inline => (fc & 0x80) != 0;
 
-// Library version: the single source is project.json.
-const String VERSION = env::PROJECT_VERSION;
+// Library version. Kept equal to "version" in project.json by tools/bump_version.c3 and checked by a test.
+const String VERSION = "0.1.0";
 
 // The only place time enters the adapters: a monotonic clock. Tests replace it.
 alias ClockFn = fn Clock();
