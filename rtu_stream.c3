@@ -176,7 +176,7 @@ fn Response? RtuClient.call(&self, Request* req, ExceptionCode* exc, int unit = 
 
 // One step of an RTU device: waits up to `wait` for a frame, executes it and writes the answer. Nothing happens
 // (and no fault is returned) when no frame arrives in time, when it is not for this device, has a bad CRC, or is
-// a broadcast. CLOSED when the stream ends.
+// a broadcast. CLOSED when the stream ends or when writing the answer fails (part of it may be on the line).
 fn void? serve_rtu_once(RtuStream* stream, ServerConfig* config, DataModel model, Duration wait)
 {
 	char[modbus::MAX_RTU_ADU] frame;
@@ -188,5 +188,7 @@ fn void? serve_rtu_once(RtuStream* stream, ServerConfig* config, DataModel model
 	}
 	char[modbus::MAX_RTU_ADU] answer;
 	usz len = server::handle_rtu(config, model, frame[:n], &answer)!;
-	if (len > 0) stream.transport.write(answer[:len], stream.write_timeout)!;
+	// a write that fails may have sent part of the answer: the line is in an unknown state, so it is reported as
+	// broken (CLOSED), never as a recoverable timeout, and nothing is sent again
+	if (len > 0 && !@ok(stream.transport.write(answer[:len], stream.write_timeout))) return modbus::CLOSED~;
 }

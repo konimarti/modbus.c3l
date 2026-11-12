@@ -16,7 +16,8 @@ interface Transport
 	// 1..buf.len bytes; faults: TIMEOUT (nothing arrived in time), CLOSED (peer EOF or error).
 	// Bytes the transport already holds are returned before it waits.
 	fn usz? read(char[] buf, Duration timeout);
-	// Writes all of data or faults (TIMEOUT, CLOSED).
+	// Writes all of data or faults (TIMEOUT, CLOSED). After a fault part of data may have been written: the stream
+	// position is unknown, so a caller treats the connection as broken and never sends the frame again.
 	fn void? write(char[] data, Duration timeout);
 	// Idempotent.
 	fn void? close();

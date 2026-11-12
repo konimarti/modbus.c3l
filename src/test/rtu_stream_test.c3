@@ -658,3 +658,75 @@ fn void test_device_answer_has_its_own_write_timeout() @test
 		assert(d.write_timeout > time::DURATION_ZERO);
 	};
 }
+
+// Same rule on RTU: after a write that failed part-way the line is in an unknown state; nothing is sent again.
+struct PartialLine
+{
+	usz accept;
+	char[256] got;
+	usz got_len;
+	int writes;
+	char[8] request;
+	bool delivered;
+}
+
+fn usz? PartialLine.read(&self, char[] buf, Duration timeout) @dynamic
+{
+	if (self.request[0] != 0 && !self.delivered)
+	{
+		self.delivered = true;
+		mem::copy(buf.ptr, &self.request[0], 8);
+		return 8;
+	}
+	return TIMEOUT~;
+}
+
+fn void? PartialLine.write(&self, char[] data, Duration timeout) @dynamic
+{
+	self.writes++;
+	usz n = data.len < self.accept ? data.len : self.accept;
+	mem::copy(&self.got[self.got_len], data.ptr, (sz)n);
+	self.got_len += n;
+	if (n < data.len) return TIMEOUT~;
+}
+
+fn void? PartialLine.close(&self) @dynamic {}
+
+fn void test_rtu_client_does_not_repeat_a_partial_write() @test
+{
+	@pool()
+	{
+		PartialLine w = { .accept = 3 };
+		RtuClient c;
+		ClientConfig k = client::default_config();
+		k.timeout = time::ms(30);
+		c.init((Transport)&w, k, time::ms(1), mem)!!;
+		c.clock = &tick_clock;
+		defer c.free();
+		Request r = pdu::read_request(Fc.READ_HOLDING_REGISTERS, 0, 1);
+		ExceptionCode exc;
+		assert(@catch(c.call(&r, &exc)) == modbus::TIMEOUT);
+		assert(w.got_len == 3 && w.writes == 1);
+		assert(@catch(c.call(&r, &exc)) == modbus::CLOSED);
+		assert(w.writes == 1 && w.got_len == 3, "nothing more was written");
+	};
+}
+
+fn void test_rtu_device_treats_a_failed_answer_write_as_a_broken_line() @test
+{
+	@pool()
+	{
+		PartialLine w = { .accept = 2 };
+		char[] req = support::hx("01 06 00 01 00 03 98 0B");
+		mem::copy(&w.request[0], req.ptr, 8);
+		RegisterMap map;
+		map.init(mem, 1, 1, 10, 1)!!;
+		defer map.free();
+		ServerConfig cfg = { .accept_any_unit = true };
+		RtuStream s;
+		s.init((Transport)&w, time::ms(1));
+		// the answer is cut after 2 bytes and the write times out: the line is not usable, not "nothing happened"
+		assert(@catch(rtu_stream::serve_rtu_once(&s, &cfg, (DataModel)&map, time::ms(5))) == modbus::CLOSED);
+		assert(w.writes == 1 && w.got_len == 2);
+	};
+}

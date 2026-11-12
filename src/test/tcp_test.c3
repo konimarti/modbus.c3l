@@ -1069,3 +1069,48 @@ $if env::POSIX:
 	};
 $endif
 }
+
+// ---- a write that fails after a partial write must never be repeated ----
+
+// Takes only the first `accept` bytes of a write, then times out (its own TIMEOUT fault).
+struct PartialWriter (Transport)
+{
+	usz accept;
+	char[256] got;
+	usz got_len;
+	int writes;
+}
+
+fn usz? PartialWriter.read(&self, char[] buf, Duration timeout) @dynamic
+{
+	return TIMEOUT~;
+}
+
+fn void? PartialWriter.write(&self, char[] data, Duration timeout) @dynamic
+{
+	self.writes++;
+	usz n = data.len < self.accept ? data.len : self.accept;
+	mem::copy(&self.got[self.got_len], data.ptr, (sz)n);
+	self.got_len += n;
+	if (n < data.len) return TIMEOUT~;
+}
+
+fn void? PartialWriter.close(&self) @dynamic {}
+
+fn void test_partial_write_is_never_repeated() @test
+{
+	@pool()
+	{
+		PartialWriter w = { .accept = 5 };
+		BlockingClient bc;
+		bc.init((Transport)&w, client::default_config(), mem)!!;
+		defer bc.free();
+		Request r = pdu::read_request(Fc.READ_HOLDING_REGISTERS, 0, 1);
+		ExceptionCode exc;
+		assert(@catch(bc.call(&r, &exc)) == modbus::TIMEOUT);
+		assert(w.got_len == 5 && w.writes == 1);
+		// the stream position is unknown: the client is broken, it does not send the frame again, whole or in part
+		assert(@catch(bc.call(&r, &exc)) == modbus::CLOSED);
+		assert(w.got_len == 5 && w.writes == 1, "nothing more was written");
+	};
+}
