@@ -51,6 +51,15 @@ fn void Net.connect(&self, TcpTransport* t)
 	t.connect("127.0.0.1", self.port, time::sec(2))!!;
 }
 
+// Connects and lets the server accept right away. Needed whenever many clients connect: connections that wait
+// in the listen queue are limited by the backlog (8), and what happens to a connect beyond it depends on the
+// system (Linux queues one more, macOS and Windows let it time out).
+fn void Net.connect_served(&self, TcpTransport* t)
+{
+	self.connect(t);
+	self.step(2);
+}
+
 fn char[] read_all(TcpTransport* t, usz want)
 {
 	char[] got = mem::temp_array(char, (sz)want);
@@ -136,8 +145,7 @@ fn void test_connection_limit_of_eight() @test
 		n.setup();
 		defer n.teardown();
 		TcpTransport[9] clients;
-		for (usz i = 0; i < 9; i++) n.connect(&clients[i]);
-		n.step(12);
+		for (usz i = 0; i < 9; i++) n.connect_served(&clients[i]);
 		assert(n.server.connection_count() == 8);
 		// the ninth connection was accepted and closed at once
 		char[8] buf;
@@ -772,13 +780,11 @@ fn void test_idle_connections_are_dropped() @test
 		n.use_test_clock();
 		n.server.idle_timeout = time::sec(30);
 		TcpTransport[8] idle;
-		for (usz i = 0; i < 8; i++) n.connect(&idle[i]);
-		n.step(10);
+		for (usz i = 0; i < 8; i++) n.connect_served(&idle[i]);
 		assert(n.server.connection_count() == 8);
 		// the server is full: a ninth client is turned away
 		TcpTransport late;
-		n.connect(&late);
-		n.step(3);
+		n.connect_served(&late);
 		char[8] buf;
 		assert(@catch(late.read(&buf, time::sec(1))) == modbus::CLOSED);
 		// a connection that talks stays; the silent ones go after the idle timeout
