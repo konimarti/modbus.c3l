@@ -1,6 +1,7 @@
 module modbus;
 
 import std::core::env;
+import std::time;
 
 // Shared constants, enums and faults of modbus.c3l.
 // Spec: Modbus Application Protocol v1.1b3 (MAP), Modbus Messaging on TCP/IP v1.0b (MTCP).
@@ -87,3 +88,17 @@ fn bool is_exception_fc(char fc) @inline => (fc & 0x80) != 0;
 
 // Library version: the single source is project.json.
 const String VERSION = env::PROJECT_VERSION;
+
+// The only place time enters the adapters: a monotonic clock. Tests replace it.
+alias ClockFn = fn Clock();
+
+fn Clock real_clock()
+{
+	return clock::now();
+}
+
+// A fault of another library's transport has its own identity: TIMEOUT is matched by name.
+fn bool is_timeout(fault f)
+{
+	return f == TIMEOUT || f.short_name() == "TIMEOUT";
+}

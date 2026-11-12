@@ -121,13 +121,6 @@ fn void? TcpTransport.close(&self) @dynamic
 
 // ---- BlockingClient ----
 
-alias ClockFn = fn Clock();
-
-fn Clock real_clock() @private
-{
-	return clock::now();
-}
-
 // Client + Transport: one call = send, wait, decode. Use Client directly to pipeline.
 struct BlockingClient
 {
@@ -141,19 +134,13 @@ fn void? BlockingClient.init(&self, Transport transport, ClientConfig config, Al
 	if (config.framing != TCP) return modbus::BAD_VALUE~;     // this client reads a byte stream of MBAP frames
 	*self = {};
 	self.transport = transport;
-	self.clock = &real_clock;
+	self.clock = &modbus::real_clock;
 	self.core.init(config, allocator)!;
 }
 
 fn void BlockingClient.free(&self)
 {
 	self.core.free();
-}
-
-// A fault of another library's transport has its own identity; they are matched by name.
-fn bool is_timeout(fault f) @private
-{
-	return f == modbus::TIMEOUT || f.short_name() == "TIMEOUT";
 }
 
 // Sends the request and waits for its answer. The Response borrows the receive buffer of the client and is valid
@@ -170,7 +157,7 @@ fn Response? BlockingClient.call(&self, Request* req, ExceptionCode* exc)
 	{
 		self.core.consume_output(queued);
 		self.core.fail_all(modbus::CLOSED);
-		return is_timeout(f) ? modbus::TIMEOUT~ : modbus::CLOSED~;
+		return modbus::is_timeout(f) ? modbus::TIMEOUT~ : modbus::CLOSED~;
 	}
 	self.core.consume_output(queued);
 	char[2048] rx;
@@ -205,7 +192,7 @@ fn Response? BlockingClient.call(&self, Request* req, ExceptionCode* exc)
 		if (catch f = n)
 		{
 			// a timeout is not an error by itself: poll() expires the request once its deadline has passed
-			if (!is_timeout(f)) self.core.fail_all(modbus::CLOSED);
+			if (!modbus::is_timeout(f)) self.core.fail_all(modbus::CLOSED);
 			continue;
 		}
 		usz taken = self.core.feed(rx[:n])!;
@@ -285,7 +272,7 @@ fn void? TcpServer.init(&self, TcpServerSocket listener, ServerConfig* config, D
 	self.allocator = allocator;
 	self.write_timeout = time::sec(5);
 	self.idle_timeout = time::sec(60);
-	self.clock = &real_clock;
+	self.clock = &modbus::real_clock;
 }
 
 // Closes every connection and the listener.
@@ -391,7 +378,7 @@ fn bool TcpServer.read_some(&self, TcpConn* c, Clock now)
 	usz? n = c.io.read(buf[:room], time::DURATION_ZERO);
 	if (catch f = n)
 	{
-		if (is_timeout(f)) return true;
+		if (modbus::is_timeout(f)) return true;
 		self.drop(c);
 		return false;
 	}
