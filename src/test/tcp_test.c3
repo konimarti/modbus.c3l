@@ -915,3 +915,35 @@ fn void test_slow_drainer_is_dropped() @test
 		assert(n.server.connection_count() == 0, "dropped although it keeps draining a little");
 	};
 }
+
+// Pipelined requests must be answered in one round, not one output buffer per poll timeout: the server loops
+// while flushing frees room for the requests it already holds.
+fn void test_pipelined_requests_are_answered_in_one_round() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();                              // time never advances
+		TcpTransport t;
+		n.connect(&t);
+		defer (void)t.close();
+		n.step(2);                                       // accepted
+		char[] batch = mem::temp_array(char, 12 * 20);
+		for (usz i = 0; i < 20; i++)
+		{
+			usz len = frame::mbap_encode((ushort)(i + 1), 1, support::hx("03 00 00 00 7D"), batch[i * 12..])!!;
+			assert(len == 12);
+		}
+		t.write(batch, time::sec(1))!!;
+		n.step(1);                                       // a single round
+		char[] all = read_all(&t, 20 * 259);
+		for (usz i = 0; i < 20; i++)
+		{
+			char[] f = all[i * 259:259];
+			assert(f[1] == (char)(i + 1) && f[0] == 0, "answer %d in order", i);
+			assert(f[7] == 3 && f[8] == 250);
+		}
+	};
+}

@@ -367,8 +367,11 @@ fn bool TcpServer.pump_flush(&self, TcpConn* c, Clock now)
 			self.drop(c);
 			return false;
 		}
+		bool had_output = c.session.output().len > 0;
 		if (!self.flush(c, now)) return false;
-		if (c.session.output().len > 0 || handled == 0) return true;
+		// done when the socket did not take everything, or when there was nothing to flush and nothing was handled:
+		// a flush that emptied a full buffer gives the requests still held by the session room to be answered
+		if (c.session.output().len > 0 || (handled == 0 && !had_output)) return true;
 	}
 }
 
