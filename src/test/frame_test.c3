@@ -97,12 +97,6 @@ fn void test_mbap_encode_limits() @test
 
 // ---- MBAP framer ----
 
-fn MbapFrame? next_frame(MbapFramer* f, MbapFrame* frame)
-{
-	if (!f.next(frame)!) return modbus::SHORT_FRAME~;
-	return *frame;
-}
-
 fn void test_framer_one_frame() @test
 {
 	@pool()
