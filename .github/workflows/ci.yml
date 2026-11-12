@@ -12,28 +12,42 @@ on:
         required: false
         default: 'v0.8.6'
 
+permissions:
+  contents: read
+
 env:
   C3_VERSION: v0.8.6
   PYMODBUS_VERSION: 3.16.2
 
+# Every step runs in bash on all three systems (Git Bash on Windows); only the compiler download on Windows uses
+# PowerShell. Nothing here can be run outside GitHub Actions: the release asset names and layouts are assumptions
+# (c3-linux.tar.gz, c3-macos.zip, c3-windows.zip); the compiler lookup on macOS and Windows does not depend on the layout.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup C3
-        shell: bash
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           VERSION="${INPUT_VERSION:-$C3_VERSION}"
           # /opt is root-owned on hosted runners: unpack below RUNNER_TEMP
           mkdir -p "$RUNNER_TEMP/c3"
-          wget -O "$RUNNER_TEMP/c3.tar.gz" "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-linux.tar.gz"
+          wget -q -O "$RUNNER_TEMP/c3.tar.gz" "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-linux.tar.gz"
           tar -xzf "$RUNNER_TEMP/c3.tar.gz" -C "$RUNNER_TEMP/c3" --strip-components=1
           echo "$RUNNER_TEMP/c3" >> "$GITHUB_PATH"
 
+      - name: Compiler version
+        run: c3c --version
+
+      # includes version_matches_project_json
       - name: Unit tests
         run: c3c test
 
@@ -42,10 +56,10 @@ jobs:
 
       - name: Smoke test and exit codes of mbtool
         run: |
-          tools/smoke.sh build/mbtool
-          tools/cli-test.sh build/mbtool
+          bash tools/smoke.sh build/mbtool
+          bash tools/cli-test.sh build/mbtool
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
@@ -53,30 +67,34 @@ jobs:
         run: python -m pip install "pymodbus==${PYMODBUS_VERSION}"
 
       - name: Interoperability with pymodbus (Modbus TCP framing)
-        run: tools/peer/run.sh
+        run: bash tools/peer/run.sh
 
       - name: Interoperability with pymodbus (RTU framing over TCP)
-        run: tools/peer/run.sh --rtu
+        run: bash tools/peer/run.sh --rtu
 
   macos:
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup C3
-        shell: bash
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           VERSION="${INPUT_VERSION:-$C3_VERSION}"
           # unpack below RUNNER_TEMP (not /opt) and put the folder that holds the c3c binary on the PATH
           mkdir -p "$RUNNER_TEMP/c3"
-          curl -L -o "$RUNNER_TEMP/c3.zip" "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-macos.zip"
+          curl -fsSL -o "$RUNNER_TEMP/c3.zip" "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-macos.zip"
           unzip -q "$RUNNER_TEMP/c3.zip" -d "$RUNNER_TEMP/c3"
           C3C="$(find "$RUNNER_TEMP/c3" -name c3c -type f | head -n 1)"
           chmod +x "$C3C"
           echo "$(dirname "$C3C")" >> "$GITHUB_PATH"
 
+      - name: Compiler version
+        run: c3c --version
+
+      # includes version_matches_project_json
       - name: Unit tests
         run: c3c test
 
@@ -85,10 +103,10 @@ jobs:
 
       - name: Smoke test and exit codes of mbtool
         run: |
-          tools/smoke.sh build/mbtool
-          tools/cli-test.sh build/mbtool
+          bash tools/smoke.sh build/mbtool
+          bash tools/cli-test.sh build/mbtool
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
@@ -96,16 +114,19 @@ jobs:
         run: python -m pip install "pymodbus==${PYMODBUS_VERSION}"
 
       - name: Interoperability with pymodbus (Modbus TCP framing)
-        run: tools/peer/run.sh
+        run: bash tools/peer/run.sh
 
       - name: Interoperability with pymodbus (RTU framing over TCP)
-        run: tools/peer/run.sh --rtu
+        run: bash tools/peer/run.sh --rtu
 
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # PowerShell only for the download: Expand-Archive and the Windows path for GITHUB_PATH. The folder that holds
+      # c3c.exe is found by search, so the layout of the archive does not matter.
       - name: Setup C3
         shell: pwsh
         env:
@@ -117,16 +138,19 @@ jobs:
           $dir = Get-ChildItem "$env:RUNNER_TEMP\c3" -Recurse -Filter c3c.exe | Select-Object -First 1
           Add-Content -Path $env:GITHUB_PATH -Value $dir.DirectoryName
 
+      - name: Compiler version
+        run: c3c --version
+
+      # includes version_matches_project_json
       - name: Unit tests
         run: c3c test
 
       - name: Build mbtool
         run: c3c build mbtool
 
-      # The scripts are POSIX shell: Git Bash is on the runner. The pymodbus runs are Linux and macOS only
-      # (the harness script compiles the peers with c3c from bash).
+      # The scripts are POSIX shell run by Git Bash on the runner, with the Windows binary name. The pymodbus runs
+      # are Linux and macOS only (the harness script compiles the peers with c3c from bash and signals processes).
       - name: Smoke test and exit codes of mbtool
-        shell: bash
         run: |
-          tools/smoke.sh build/mbtool.exe
-          tools/cli-test.sh build/mbtool.exe
+          bash tools/smoke.sh build/mbtool.exe
+          bash tools/cli-test.sh build/mbtool.exe
