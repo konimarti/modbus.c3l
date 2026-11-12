@@ -107,14 +107,20 @@ fn void RtuClient.free(&self)
 }
 
 // Sends a write to every device (unit 0): nothing is answered and nothing is awaited. The caller waits the
-// turnaround time itself before the next request (Modbus over Serial Line 2.4.1).
+// turnaround time itself before the next request (Modbus over Serial Line 2.4.1). A failed write breaks the client
+// (TIMEOUT or CLOSED, then CLOSED): part of the frame may be on the line and it is never sent again.
 fn void? RtuClient.broadcast(&self, Request* req)
 {
 	self.core.send(req, self.clock(), 0, 0)!;
 	char[] out = self.core.output();
 	usz queued = out.len;
 	defer self.core.consume_output(queued);
-	self.stream.write_frame(out, self.core.config.timeout)!;
+	if (catch f = self.stream.write_frame(out, self.core.config.timeout))
+	{
+		// part of the frame may be on the line: the client is broken, the frame is never sent again
+		self.core.fail_all(modbus::CLOSED);
+		return modbus::is_timeout(f) ? modbus::TIMEOUT~ : modbus::CLOSED~;
+	}
 }
 
 // Sends the request to `unit` (-1: the configured unit; 0 is a broadcast: use broadcast()) and waits for the answer.

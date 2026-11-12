@@ -730,3 +730,28 @@ fn void test_rtu_device_treats_a_failed_answer_write_as_a_broken_line() @test
 		assert(w.writes == 1 && w.got_len == 2);
 	};
 }
+
+// A broadcast that failed part-way breaks the client like any other request: a retry must not write a whole
+// frame behind the half frame.
+fn void test_rtu_broadcast_does_not_repeat_a_partial_write() @test
+{
+	@pool()
+	{
+		PartialLine w = { .accept = 3 };
+		RtuClient c;
+		ClientConfig k = client::default_config();
+		k.timeout = time::ms(30);
+		k.allow_write = true;
+		c.init((Transport)&w, k, time::ms(1), mem)!!;
+		c.clock = &tick_clock;
+		defer c.free();
+		Request r = pdu::write_single_register(1, 7);
+		assert(@catch(c.broadcast(&r)) == modbus::TIMEOUT);
+		assert(w.writes == 1 && w.got_len == 3);
+		assert(@catch(c.broadcast(&r)) == modbus::CLOSED);
+		assert(w.writes == 1 && w.got_len == 3, "nothing more was written");
+		ExceptionCode exc;
+		assert(@catch(c.call(&r, &exc, 1)) == modbus::CLOSED);
+		assert(w.writes == 1);
+	};
+}
