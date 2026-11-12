@@ -607,3 +607,54 @@ fn void test_read_frame_stops_on_a_line_that_never_goes_silent() @test
 	assert(@catch(s.read_frame(&small, time::ms(10))) == modbus::BAD_LENGTH);
 	assert(c.reads < 1000);
 }
+
+// The time given to listen is not the time allowed to write the answer: a device that polls with a zero wait must
+// still be able to write a whole frame.
+struct Recorder
+{
+	char[8] request;
+	bool delivered;
+	Duration write_timeout;
+	int writes;
+}
+
+fn usz? Recorder.read(&self, char[] buf, Duration timeout) @dynamic
+{
+	if (self.delivered) return TIMEOUT~;
+	self.delivered = true;
+	mem::copy(buf.ptr, &self.request[0], 8);
+	return 8;
+}
+
+fn void? Recorder.write(&self, char[] data, Duration timeout) @dynamic
+{
+	self.writes++;
+	self.write_timeout = timeout;
+}
+
+fn void? Recorder.close(&self) @dynamic {}
+
+fn void test_device_answer_has_its_own_write_timeout() @test
+{
+	@pool()
+	{
+		Recorder r;
+		char[] req = support::hx("01 06 00 01 00 03 98 0B");
+		mem::copy(&r.request[0], req.ptr, 8);
+		RegisterMap map;
+		map.init(mem, 1, 1, 10, 1)!!;
+		defer map.free();
+		ServerConfig cfg = { .accept_any_unit = true };
+		RtuStream s;
+		s.init((Transport)&r, time::ms(1));
+		s.write_timeout = time::ms(750);
+		rtu_stream::serve_rtu_once(&s, &cfg, (DataModel)&map, time::DURATION_ZERO)!!;
+		assert(r.writes == 1);
+		assert(r.write_timeout == time::ms(750), "the answer is written with the stream's write timeout");
+		assert(map.holding[1] == 3);
+		// the default is not zero
+		RtuStream d;
+		d.init((Transport)&r, time::ms(1));
+		assert(d.write_timeout > time::DURATION_ZERO);
+	};
+}

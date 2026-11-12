@@ -19,12 +19,14 @@ struct RtuStream
 {
 	Transport transport;
 	Duration gap;            // silence that ends a frame, and the quiet time before a request is sent
+	Duration write_timeout;  // time allowed to write an answer in serve_rtu_once (default 1 s)
 }
 
 fn void RtuStream.init(&self, Transport transport, Duration gap)
 {
 	self.transport = transport;
 	self.gap = gap;
+	self.write_timeout = time::sec(1);
 }
 
 // Waits up to `wait` for the first byte (TIMEOUT when nothing comes), then collects bytes until the line has been
@@ -186,5 +188,5 @@ fn void? serve_rtu_once(RtuStream* stream, ServerConfig* config, DataModel model
 	}
 	char[modbus::MAX_RTU_ADU] answer;
 	usz len = server::handle_rtu(config, model, frame[:n], &answer)!;
-	if (len > 0) stream.transport.write(answer[:len], wait)!;
+	if (len > 0) stream.transport.write(answer[:len], stream.write_timeout)!;
 }
