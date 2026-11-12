@@ -6,6 +6,10 @@
 	"targets": {
 		"modbus": {
 			"type": "static-lib"
+		},
+		"mbtool": {
+			"type": "executable",
+			"sources": [ "src/mbtool/**" ]
 		}
 	}
 }
