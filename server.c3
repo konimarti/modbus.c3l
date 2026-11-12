@@ -477,6 +477,7 @@ fn void? RegisterMap.init(&self, Allocator allocator, usz ncoils, usz ndiscrete,
 {
 	*self = {};
 	self.allocator = allocator;
+	defer catch self.free();        // a failure below gives back the tables allocated before it
 	if (ncoils) self.coils = alloc::new_array_try(allocator, bool, (sz)ncoils)!;
 	if (ndiscrete) self.discrete = alloc::new_array_try(allocator, bool, (sz)ndiscrete)!;
 	if (nholding) self.holding = alloc::new_array_try(allocator, ushort, (sz)nholding)!;

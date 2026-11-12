@@ -625,3 +625,17 @@ fn void test_random_requests_in_valid_frames() @test
 		}
 	}
 }
+
+// A failing allocation in the middle must not leak the tables allocated before it.
+fn void test_register_map_init_failure_releases_tables() @test
+{
+	support::LimitedAllocator a = { .allowed = 2 };         // coils and discrete inputs succeed, holding fails
+	RegisterMap m;
+	assert(!@ok(m.init(&a, 10, 10, 1000, 10)));
+	assert(a.live == 0, "the tables of a failed init were not released (%d live)", a.live);
+	support::LimitedAllocator enough = { .allowed = 4 };
+	m.init(&enough, 10, 10, 10, 10)!!;
+	assert(enough.live == 4);
+	m.free();
+	assert(enough.live == 0);
+}
