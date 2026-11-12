@@ -102,4 +102,21 @@ and never answered. `tools/peer/run.sh --rtu` runs the pymodbus suite with RTU f
 `c3c test` runs the unit tests (hex fixtures from the specification examples, loopback tests, fuzz-style tests with
 seeded random input). They need no network peer; the TCP tests use 127.0.0.1 with a free port.
 
+## Versioning
+
+The version lives in `project.json` and in `modbus::VERSION` (`modbus.c3`); bump both with
+`c3c compile-run tools/bump_version.c3 -- 0.2.0` from the repository root (a test checks that they match).
+
+## Part of the C3 plant automation libraries
+
+Pure C3 building blocks for plant data infrastructure: read PLCs over S7, Modbus and OPC UA, move the
+data over MQTT, and protect it with TLS. Each library works on its own; together they form the base for
+an edge gateway.
+
+- [mqtt.c3l](https://github.com/konimarti/mqtt.c3l): MQTT 3.1.1 and 5.0 client (sans-IO core, blocking client, `mqttc`)
+- **modbus.c3l** (this library): Modbus TCP and RTU client and server (`mbtool`)
+- [s7.c3l](https://github.com/konimarti/s7.c3l): Siemens S7comm client for S7-300/400/1200/1500 (`s7tool`)
+- [opcua.c3l](https://github.com/konimarti/opcua.c3l): OPC UA binary client with generated types (`uatool`)
+- [tls.c3l](https://github.com/konimarti/tls.c3l): TLS 1.2/1.3 transport on OpenSSL 3 with certificate and hostname checks (`tlsc`)
+
 Licence: MIT.
