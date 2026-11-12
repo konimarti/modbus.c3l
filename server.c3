@@ -493,47 +493,33 @@ fn ExceptionCode RegisterMap.check_range(&self, char unit, Table table, ushort a
 	return ExceptionCode.NONE;
 }
 
-fn ExceptionCode RegisterMap.read_coils(&self, char unit, ushort addr, bool[] out) @dynamic
+// The six accessors are one copy loop over different tables. A range that is not inside the table is unmapped.
+macro ExceptionCode copy_out(table, ushort addr, out) @private
 {
-	if ((usz)addr + out.len > self.coils.len) return ExceptionCode.ILLEGAL_DATA_ADDRESS;
-	for (usz i = 0; i < out.len; i++) out[i] = self.coils[addr + i];
+	if ((usz)addr + out.len > table.len) return ExceptionCode.ILLEGAL_DATA_ADDRESS;
+	for (usz i = 0; i < out.len; i++) out[i] = table[addr + i];
 	return ExceptionCode.NONE;
 }
 
-fn ExceptionCode RegisterMap.read_discrete_inputs(&self, char unit, ushort addr, bool[] out) @dynamic
+// Checks the whole range first: nothing is written when any address is unmapped.
+macro ExceptionCode copy_in(table, ushort addr, values) @private
 {
-	if ((usz)addr + out.len > self.discrete.len) return ExceptionCode.ILLEGAL_DATA_ADDRESS;
-	for (usz i = 0; i < out.len; i++) out[i] = self.discrete[addr + i];
+	if ((usz)addr + values.len > table.len) return ExceptionCode.ILLEGAL_DATA_ADDRESS;
+	for (usz i = 0; i < values.len; i++) table[addr + i] = values[i];
 	return ExceptionCode.NONE;
 }
 
-fn ExceptionCode RegisterMap.read_holding(&self, char unit, ushort addr, ushort[] out) @dynamic
-{
-	if ((usz)addr + out.len > self.holding.len) return ExceptionCode.ILLEGAL_DATA_ADDRESS;
-	for (usz i = 0; i < out.len; i++) out[i] = self.holding[addr + i];
-	return ExceptionCode.NONE;
-}
+fn ExceptionCode RegisterMap.read_coils(&self, char unit, ushort addr, bool[] out) @dynamic => copy_out(self.coils, addr, out);
+fn ExceptionCode RegisterMap.read_discrete_inputs(&self, char unit, ushort addr, bool[] out) @dynamic => copy_out(self.discrete, addr, out);
+fn ExceptionCode RegisterMap.read_holding(&self, char unit, ushort addr, ushort[] out) @dynamic => copy_out(self.holding, addr, out);
+fn ExceptionCode RegisterMap.read_input(&self, char unit, ushort addr, ushort[] out) @dynamic => copy_out(self.input, addr, out);
 
-fn ExceptionCode RegisterMap.read_input(&self, char unit, ushort addr, ushort[] out) @dynamic
-{
-	if ((usz)addr + out.len > self.input.len) return ExceptionCode.ILLEGAL_DATA_ADDRESS;
-	for (usz i = 0; i < out.len; i++) out[i] = self.input[addr + i];
-	return ExceptionCode.NONE;
-}
-
-// Writes check the whole range first: nothing is written when any address is unmapped.
 fn ExceptionCode RegisterMap.write_coils(&self, char unit, ushort addr, bool[] values) @dynamic
 {
-	if (self.read_only) return ExceptionCode.ILLEGAL_FUNCTION;
-	if ((usz)addr + values.len > self.coils.len) return ExceptionCode.ILLEGAL_DATA_ADDRESS;
-	for (usz i = 0; i < values.len; i++) self.coils[addr + i] = values[i];
-	return ExceptionCode.NONE;
+	return self.read_only ? ExceptionCode.ILLEGAL_FUNCTION : copy_in(self.coils, addr, values);
 }
 
 fn ExceptionCode RegisterMap.write_holding(&self, char unit, ushort addr, ushort[] values) @dynamic
 {
-	if (self.read_only) return ExceptionCode.ILLEGAL_FUNCTION;
-	if ((usz)addr + values.len > self.holding.len) return ExceptionCode.ILLEGAL_DATA_ADDRESS;
-	for (usz i = 0; i < values.len; i++) self.holding[addr + i] = values[i];
-	return ExceptionCode.NONE;
+	return self.read_only ? ExceptionCode.ILLEGAL_FUNCTION : copy_in(self.holding, addr, values);
 }
