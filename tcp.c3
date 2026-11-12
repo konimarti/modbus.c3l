@@ -158,7 +158,9 @@ fn void BlockingClient.free(&self)
 // Sends the request and waits for its answer. The Response borrows the receive buffer of the client and is valid
 // until the next call. REMOTE_EXCEPTION: the peer answered with an exception, its code is stored in *exc.
 // WRITE_NOT_ALLOWED: the write guard refused the request (nothing was sent). TIMEOUT: no answer in config.timeout;
-// the connection stays usable. CLOSED: the peer closed or broke the stream: connect again.
+// the connection stays usable. A TIMEOUT or CLOSED from writing the request is different: part of it may be on the wire,
+// so the client is broken and every later call returns CLOSED: connect again, never resend. CLOSED: the peer closed or
+// broke the stream.
 fn Response? BlockingClient.call(&self, Request* req, ExceptionCode* exc)
 {
 	Clock start = self.clock();
