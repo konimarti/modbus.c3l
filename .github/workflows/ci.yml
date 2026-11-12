@@ -26,10 +26,11 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ github.event.inputs.version || env.C3_VERSION }}"
-          mkdir -p /opt/c3
-          wget -O /tmp/c3.tar.gz "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-linux.tar.gz"
-          tar -xzf /tmp/c3.tar.gz -C /opt/c3 --strip-components=1
-          echo "/opt/c3" >> "$GITHUB_PATH"
+          # /opt is root-owned on hosted runners: unpack below RUNNER_TEMP
+          mkdir -p "$RUNNER_TEMP/c3"
+          wget -O "$RUNNER_TEMP/c3.tar.gz" "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-linux.tar.gz"
+          tar -xzf "$RUNNER_TEMP/c3.tar.gz" -C "$RUNNER_TEMP/c3" --strip-components=1
+          echo "$RUNNER_TEMP/c3" >> "$GITHUB_PATH"
 
       - name: Unit tests
         run: c3c test
@@ -64,11 +65,13 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ github.event.inputs.version || env.C3_VERSION }}"
-          mkdir -p /opt/c3
-          curl -L -o /tmp/c3.zip "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-macos.zip"
-          unzip -q /tmp/c3.zip -d /tmp/c3-unpacked
-          cp -R /tmp/c3-unpacked/*/* /opt/c3/ 2>/dev/null || cp -R /tmp/c3-unpacked/* /opt/c3/
-          echo "/opt/c3" >> "$GITHUB_PATH"
+          # unpack below RUNNER_TEMP (not /opt) and put the folder that holds the c3c binary on the PATH
+          mkdir -p "$RUNNER_TEMP/c3"
+          curl -L -o "$RUNNER_TEMP/c3.zip" "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-macos.zip"
+          unzip -q "$RUNNER_TEMP/c3.zip" -d "$RUNNER_TEMP/c3"
+          C3C="$(find "$RUNNER_TEMP/c3" -name c3c -type f | head -n 1)"
+          chmod +x "$C3C"
+          echo "$(dirname "$C3C")" >> "$GITHUB_PATH"
 
       - name: Unit tests
         run: c3c test
