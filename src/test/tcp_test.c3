@@ -972,3 +972,37 @@ fn void test_listener_is_skipped_during_the_accept_back_off() @test
 		assert(read_all(&t, 11).len == 11);
 	};
 }
+
+// Zero switches a deadline off, as for idle_timeout: a blocked connection is then kept.
+fn void test_zero_write_timeout_switches_the_deadline_off() @test
+{
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		n.use_test_clock();
+		n.server.write_timeout = time::DURATION_ZERO;
+		n.server.idle_timeout = time::DURATION_ZERO;
+		TcpTransport bad;
+		n.connect(&bad);
+		defer (void)bad.close();
+		char[] burst = mem::temp_array(char, 12 * 100);
+		for (usz i = 0; i < 100; i++)
+		{
+			usz len = frame::mbap_encode((ushort)(i + 1), 1, support::hx("03 00 00 00 7D"), burst[i * 12..])!!;
+			assert(len == 12);
+		}
+		int sent = 0;
+		while (n.server.blocked_connections() == 0)
+		{
+			assert(sent < 2000, "the server never ran out of room to answer");
+			bad.write(burst, time::sec(2))!!;
+			n.step(2);
+			sent++;
+		}
+		advance(1000000);
+		n.step(3);
+		assert(n.server.connection_count() == 1, "no write deadline: the blocked connection stays");
+	};
+}

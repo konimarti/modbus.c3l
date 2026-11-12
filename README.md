@@ -83,7 +83,7 @@ and never answered. `tools/peer/run.sh --rtu` runs the pymodbus suite with RTU f
 ## Server limits
 
 `TcpServer` serves up to 8 connections at a time with non-blocking sockets. A connection whose answers are not taken for
-`write_timeout` (default 5 s, however much it drains meanwhile) is dropped, and so is a connection that is silent for
+`write_timeout` (default 5 s, however much it drains meanwhile; zero switches it off) is dropped, and so is a connection that is silent for
 `idle_timeout` (default 60 s, zero switches it off) or that leaves a request unfinished for `read_timeout` (default 10 s). A full server turns new clients away until a slot is free.
 
 ## Things to know about real devices

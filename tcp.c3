@@ -259,7 +259,7 @@ struct TcpServer
 	ServerConfig* config;
 	DataModel model;
 	Allocator allocator;
-	Duration write_timeout;  // default 5 s
+	Duration write_timeout;  // default 5 s, zero = off
 	Duration idle_timeout;   // default 60 s
 	Duration read_timeout;   // an unfinished request is dropped after this long, however slowly it grows (default 10 s, zero = off)
 	ClockFn clock;           // monotonic clock; tests replace it
@@ -404,7 +404,7 @@ fn void TcpServer.service(&self, TcpConn* c, bool ready, Clock now)
 {
 	if (ready && c.session.output().len == 0 && !self.read_some(c, now)) return;
 	if (!self.pump_flush(c, now)) return;
-	if (c.blocked && since(now, c.blocked_since) > self.write_timeout)
+	if (self.write_timeout > time::DURATION_ZERO && c.blocked && since(now, c.blocked_since) > self.write_timeout)
 	{
 		self.drop(c);                       // the peer does not take its answers
 		return;
