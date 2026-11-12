@@ -581,3 +581,26 @@ fn void test_individual_access_needs_the_conformity_bit() @test
 		support::assert_bytes(r.call("2B 0E 04 05"), "2B 0E 04 81 00 00 01 05 02 4D 31");
 	};
 }
+
+// handle_rtu has no init step, so it checks the configuration itself: a 250-byte object value must not be served.
+fn void test_rtu_entry_checks_the_configuration() @test
+{
+	@pool()
+	{
+		RtuRig r;
+		r.setup();
+		defer r.map.free();
+		r.cfg.conformity_level = 1;
+		r.cfg.device_objects = big_objects(1, 250);
+		char[256] out;
+		char[256] frame;
+		usz n = frame::rtu_encode(1, support::hx("2B 0E 01 00"), &frame)!!;
+		assert(@catch(server::handle_rtu(&r.cfg, (DataModel)&r.map, frame[:n], &out)) == modbus::BAD_LENGTH);
+		pdu::DeviceObject[2] unordered = { { 2, "a" }, { 1, "b" } };
+		r.cfg.device_objects = &unordered;
+		assert(@catch(server::handle_rtu(&r.cfg, (DataModel)&r.map, frame[:n], &out)) == modbus::BAD_VALUE);
+		// a valid configuration still answers
+		r.cfg.device_objects = basic_objects();
+		assert(server::handle_rtu(&r.cfg, (DataModel)&r.map, frame[:n], &out)!! > 0);
+	};
+}

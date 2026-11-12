@@ -428,6 +428,7 @@ fn usz read_device_id(ServerConfig* config, Request r, char[] resp) @private
 // reserved), a broadcast (address 0: write functions are executed, nothing is answered, other functions are ignored).
 fn usz? handle_rtu(ServerConfig* config, DataModel model, char[] frame, char[] out)
 {
+	config.check()!;                 // there is no init step on this path
 	RtuFrame? decoded = frame::rtu_decode(frame);
 	if (catch f = decoded) return 0;
 	char addr = decoded.addr;
