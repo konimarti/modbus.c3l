@@ -224,11 +224,10 @@ fn usz execute(ServerConfig* config, DataModel model, char unit, char[] pdu, cha
 		case READ_COILS:
 		case READ_DISCRETE_INPUTS:
 			bool coils = (Fc)fc == Fc.READ_COILS;
-			e = model.check_range(unit, coils ? Table.COILS : Table.DISCRETE_INPUTS, r.addr, r.qty);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			bool[modbus::MAX_READ_BITS] bits;
-			e = coils ? model.read_coils(unit, r.addr, bits[:r.qty]) : model.read_discrete_inputs(unit, r.addr, bits[:r.qty]);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			e = model.check_range(unit, coils ? Table.COILS : Table.DISCRETE_INPUTS, r.addr, r.qty);
+			if (e == NONE) e = coils ? model.read_coils(unit, r.addr, bits[:r.qty]) : model.read_discrete_inputs(unit, r.addr, bits[:r.qty]);
+			if (e != NONE) return exception(fc, e, resp);
 			usz bytes = ((usz)r.qty + 7) / 8;
 			resp[0] = fc;
 			resp[1] = (char)bytes;
@@ -241,11 +240,10 @@ fn usz execute(ServerConfig* config, DataModel model, char unit, char[] pdu, cha
 		case READ_HOLDING_REGISTERS:
 		case READ_INPUT_REGISTERS:
 			bool holding = (Fc)fc == Fc.READ_HOLDING_REGISTERS;
-			e = model.check_range(unit, holding ? Table.HOLDING_REGISTERS : Table.INPUT_REGISTERS, r.addr, r.qty);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			ushort[modbus::MAX_READ_REGS] regs;
-			e = holding ? model.read_holding(unit, r.addr, regs[:r.qty]) : model.read_input(unit, r.addr, regs[:r.qty]);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			e = model.check_range(unit, holding ? Table.HOLDING_REGISTERS : Table.INPUT_REGISTERS, r.addr, r.qty);
+			if (e == NONE) e = holding ? model.read_holding(unit, r.addr, regs[:r.qty]) : model.read_input(unit, r.addr, regs[:r.qty]);
+			if (e != NONE) return exception(fc, e, resp);
 			resp[0] = fc;
 			resp[1] = (char)(r.qty * 2);
 			for (usz i = 0; i < r.qty; i++)
@@ -255,44 +253,38 @@ fn usz execute(ServerConfig* config, DataModel model, char unit, char[] pdu, cha
 			}
 			return 2 + (usz)r.qty * 2;
 		case WRITE_SINGLE_COIL:
-			e = model.check_range(unit, Table.COILS, r.addr, 1);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			bool[1] one = { r.value == 0xFF00 };
-			e = model.write_coils(unit, r.addr, &one);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			e = model.check_range(unit, Table.COILS, r.addr, 1);
+			if (e == NONE) e = model.write_coils(unit, r.addr, &one);
+			if (e != NONE) return exception(fc, e, resp);
 			return echo(fc, r.addr, r.value, resp);
 		case WRITE_SINGLE_REGISTER:
-			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, 1);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			ushort[1] reg = { r.value };
-			e = model.write_holding(unit, r.addr, &reg);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, 1);
+			if (e == NONE) e = model.write_holding(unit, r.addr, &reg);
+			if (e != NONE) return exception(fc, e, resp);
 			return echo(fc, r.addr, r.value, resp);
 		case WRITE_MULTIPLE_COILS:
-			e = model.check_range(unit, Table.COILS, r.addr, r.qty);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			bool[modbus::MAX_WRITE_BITS] values;
 			for (usz i = 0; i < r.qty; i++) values[i] = ((r.data[i / 8] >> (i % 8)) & 1) != 0;
-			e = model.write_coils(unit, r.addr, values[:r.qty]);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			e = model.check_range(unit, Table.COILS, r.addr, r.qty);
+			if (e == NONE) e = model.write_coils(unit, r.addr, values[:r.qty]);
+			if (e != NONE) return exception(fc, e, resp);
 			return echo(fc, r.addr, r.qty, resp);
 		case WRITE_MULTIPLE_REGISTERS:
-			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, r.qty);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			ushort[modbus::MAX_WRITE_REGS] words;
 			for (usz i = 0; i < r.qty; i++) words[i] = (ushort)(((ushort)r.data[i * 2] << 8) | r.data[i * 2 + 1]);
-			e = model.write_holding(unit, r.addr, words[:r.qty]);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, r.qty);
+			if (e == NONE) e = model.write_holding(unit, r.addr, words[:r.qty]);
+			if (e != NONE) return exception(fc, e, resp);
 			return echo(fc, r.addr, r.qty, resp);
 		case MASK_WRITE_REGISTER:
-			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, 1);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			ushort[1] old;
-			e = model.read_holding(unit, r.addr, &old);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, 1);
+			if (e == NONE) e = model.read_holding(unit, r.addr, &old);
 			ushort[1] updated = { (old[0] & r.and_mask) | (r.or_mask & ~r.and_mask) };
-			e = model.write_holding(unit, r.addr, &updated);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			if (e == NONE) e = model.write_holding(unit, r.addr, &updated);
+			if (e != NONE) return exception(fc, e, resp);
 			resp[0] = fc;
 			resp[1] = (char)(r.addr >> 8);
 			resp[2] = (char)(r.addr & 0xFF);
@@ -303,17 +295,14 @@ fn usz execute(ServerConfig* config, DataModel model, char unit, char[] pdu, cha
 			return 7;
 		case READ_WRITE_MULTIPLE_REGISTERS:
 			// both ranges are checked before anything is written; then write, then read
-			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.write_addr, r.write_qty);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
-			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, r.qty);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			ushort[modbus::MAX_RW_WRITE_REGS] rw_words;
-			for (usz i = 0; i < r.write_qty; i++) rw_words[i] = (ushort)(((ushort)r.data[i * 2] << 8) | r.data[i * 2 + 1]);
-			e = model.write_holding(unit, r.write_addr, rw_words[:r.write_qty]);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
 			ushort[modbus::MAX_RW_READ_REGS] rw_regs;
-			e = model.read_holding(unit, r.addr, rw_regs[:r.qty]);
-			if (e != ExceptionCode.NONE) return exception(fc, e, resp);
+			for (usz i = 0; i < r.write_qty; i++) rw_words[i] = (ushort)(((ushort)r.data[i * 2] << 8) | r.data[i * 2 + 1]);
+			e = model.check_range(unit, Table.HOLDING_REGISTERS, r.write_addr, r.write_qty);
+			if (e == NONE) e = model.check_range(unit, Table.HOLDING_REGISTERS, r.addr, r.qty);
+			if (e == NONE) e = model.write_holding(unit, r.write_addr, rw_words[:r.write_qty]);
+			if (e == NONE) e = model.read_holding(unit, r.addr, rw_regs[:r.qty]);
+			if (e != NONE) return exception(fc, e, resp);
 			resp[0] = fc;
 			resp[1] = (char)(r.qty * 2);
 			for (usz i = 0; i < r.qty; i++)
