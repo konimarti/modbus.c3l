@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'C3 compiler version to use'
+        required: false
+        default: 'v0.8.6'
+
+env:
+  C3_VERSION: v0.8.6
+  PYMODBUS_VERSION: 3.16.2
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup C3
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version || env.C3_VERSION }}"
+          mkdir -p /opt/c3
+          wget -O /tmp/c3.tar.gz "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-linux.tar.gz"
+          tar -xzf /tmp/c3.tar.gz -C /opt/c3 --strip-components=1
+          echo "/opt/c3" >> "$GITHUB_PATH"
+
+      - name: Unit tests
+        run: c3c test
+
+      - name: Build mbtool
+        run: c3c build mbtool
+
+      - name: Smoke test and exit codes of mbtool
+        run: |
+          tools/smoke.sh build/mbtool
+          tools/cli-test.sh build/mbtool
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pymodbus
+        run: python -m pip install "pymodbus==${PYMODBUS_VERSION}"
+
+      - name: Interoperability with pymodbus (Modbus TCP framing)
+        run: tools/peer/run.sh
+
+      - name: Interoperability with pymodbus (RTU framing over TCP)
+        run: tools/peer/run.sh --rtu
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup C3
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version || env.C3_VERSION }}"
+          mkdir -p /opt/c3
+          curl -L -o /tmp/c3.zip "https://github.com/c3lang/c3c/releases/download/${VERSION}/c3-macos.zip"
+          unzip -q /tmp/c3.zip -d /tmp/c3-unpacked
+          cp -R /tmp/c3-unpacked/*/* /opt/c3/ 2>/dev/null || cp -R /tmp/c3-unpacked/* /opt/c3/
+          echo "/opt/c3" >> "$GITHUB_PATH"
+
+      - name: Unit tests
+        run: c3c test
+
+      - name: Build mbtool
+        run: c3c build mbtool
+
+      - name: Smoke test and exit codes of mbtool
+        run: |
+          tools/smoke.sh build/mbtool
+          tools/cli-test.sh build/mbtool
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pymodbus
+        run: python -m pip install "pymodbus==${PYMODBUS_VERSION}"
+
+      - name: Interoperability with pymodbus (Modbus TCP framing)
+        run: tools/peer/run.sh
+
+      - name: Interoperability with pymodbus (RTU framing over TCP)
+        run: tools/peer/run.sh --rtu
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup C3
+        shell: pwsh
+        run: |
+          $version = "${{ github.event.inputs.version || env.C3_VERSION }}"
+          Invoke-WebRequest -Uri "https://github.com/c3lang/c3c/releases/download/$version/c3-windows.zip" -OutFile "$env:RUNNER_TEMP\c3.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\c3.zip" -DestinationPath "$env:RUNNER_TEMP\c3"
+          $dir = Get-ChildItem "$env:RUNNER_TEMP\c3" -Recurse -Filter c3c.exe | Select-Object -First 1
+          Add-Content -Path $env:GITHUB_PATH -Value $dir.DirectoryName
+
+      - name: Unit tests
+        run: c3c test
+
+      - name: Build mbtool
+        run: c3c build mbtool
+
+      # The scripts are POSIX shell: Git Bash is on the runner. The pymodbus runs are Linux and macOS only
+      # (the harness script compiles the peers with c3c from bash).
+      - name: Smoke test and exit codes of mbtool
+        shell: bash
+        run: |
+          tools/smoke.sh build/mbtool.exe
+          tools/cli-test.sh build/mbtool.exe
