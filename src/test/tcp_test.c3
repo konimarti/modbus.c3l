@@ -1,5 +1,6 @@
 module modbus::tcp_test;
 
+import libc;
 import std::core::mem;
 import std::net;
 import std::time;
@@ -1005,4 +1006,66 @@ fn void test_zero_write_timeout_switches_the_deadline_off() @test
 		n.step(3);
 		assert(n.server.connection_count() == 1, "no write deadline: the blocked connection stays");
 	};
+}
+
+// ---- a signal that interrupts poll must not close a healthy connection or stop the server ----
+
+// POSIX only: the tests below are empty elsewhere, and `alarm` is never referenced there.
+extern fn CInt alarm(CUInt seconds);
+
+fn void on_alarm(CInt sig)
+{
+}
+
+// SIGALRM is 14 on Linux and macOS. A handler is installed so the signal does not kill the test process;
+// poll() is interrupted whether or not the system restarts other calls.
+fn void arm_alarm(CUInt seconds)
+{
+$if env::POSIX:
+	libc::signal(14, &on_alarm);
+	alarm(seconds);
+$endif
+}
+
+fn void test_read_interrupted_by_a_signal_is_a_timeout() @test
+{
+$if env::POSIX:
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		TcpTransport t;
+		n.connect(&t);
+		defer (void)t.close();
+		char[8] buf;
+		arm_alarm(1);
+		// blocked in poll for up to 5 s; the alarm interrupts it after 1 s
+		assert(@catch(t.read(&buf, time::sec(5))) == modbus::TIMEOUT);
+		assert(t.open, "the connection is still open");
+		t.write(support::hx("00 01 00 00 00 06 01 03 00 00 00 01"), time::sec(1))!!;
+		n.step(3);
+		assert(read_all(&t, 11).len == 11);
+	};
+$endif
+}
+
+fn void test_server_round_interrupted_by_a_signal_carries_on() @test
+{
+$if env::POSIX:
+	@pool()
+	{
+		Net n;
+		n.setup();
+		defer n.teardown();
+		arm_alarm(1);
+		n.server.serve_once(time::sec(5))!!;          // interrupted, not a failure
+		TcpTransport t;
+		n.connect(&t);
+		defer (void)t.close();
+		t.write(support::hx("00 01 00 00 00 06 01 03 00 00 00 01"), time::sec(1))!!;
+		n.step(3);
+		assert(read_all(&t, 11).len == 11);
+	};
+$endif
 }

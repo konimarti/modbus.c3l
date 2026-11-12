@@ -31,10 +31,17 @@ fn Duration sanitize(Duration t) @private
 }
 
 // Waits until the socket is ready for `what`. false: the time ran out.
-fn bool? wait_socket(TcpSocket* socket, PollSubscribe what, Duration timeout) @private
+// A signal that interrupts the wait is not an error: it counts as "not ready" and sets *interrupted.
+fn bool? wait_socket(TcpSocket* socket, PollSubscribe what, Duration timeout, bool* interrupted = null) @private
 {
 	Poll[1] p = { { .socket = socket.sock, .events = what } };
-	ulong n = net::poll(&p, sanitize(timeout))!;
+	ulong? n = net::poll(&p, sanitize(timeout));
+	if (catch f = n)
+	{
+		if (f != io::INTERRUPTED) return f~;
+		if (interrupted) *interrupted = true;
+		return false;
+	}
 	return n > 0;
 }
 
@@ -70,7 +77,7 @@ fn usz? TcpTransport.read(&self, char[] buf, Duration timeout) @dynamic
 	if (catch f = ready) return modbus::CLOSED~;
 	if (!ready) return modbus::TIMEOUT~;
 	sz? n = self.socket.read(buf);
-	if (catch f = n) return modbus::CLOSED~;
+	if (catch f = n) return (f == io::INTERRUPTED || f == io::WOULD_BLOCK) ? modbus::TIMEOUT~ : modbus::CLOSED~;
 	if (n <= 0) return modbus::CLOSED~;           // EOF
 	return (usz)n;
 }
@@ -82,9 +89,14 @@ fn void? TcpTransport.write(&self, char[] data, Duration timeout) @dynamic
 	char[] rest = data;
 	while (rest.len > 0)
 	{
-		bool? ready = wait_socket(&self.socket, PollSubscribe.WRITE, timeout);
+		bool interrupted = false;
+		bool? ready = wait_socket(&self.socket, PollSubscribe.WRITE, timeout, &interrupted);
 		if (catch f = ready) return modbus::CLOSED~;
-		if (!ready) return modbus::TIMEOUT~;
+		if (!ready)
+		{
+			if (interrupted) continue;                // a signal, not the deadline: wait again
+			return modbus::TIMEOUT~;
+		}
 		sz? n = self.socket.write(rest);
 		if (catch f = n) return modbus::CLOSED~;
 		if (n <= 0) return modbus::CLOSED~;
@@ -453,7 +465,12 @@ fn void? TcpServer.serve_once(&self, Duration timeout)
 		owner[n] = (usz)i;
 		n++;
 	}
-	ulong ready = net::poll(polls[:n], sanitize(timeout))!;
+	ulong? polled = net::poll(polls[:n], sanitize(timeout));
+	if (catch f = polled)
+	{
+		if (f == io::INTERRUPTED) return;         // a signal: the next round carries on
+		return f~;
+	}
 	Clock now = self.clock();
 	if (listening && (ushort)polls[0].revents != 0)
 	{
